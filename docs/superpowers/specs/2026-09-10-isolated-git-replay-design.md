@@ -25,7 +25,7 @@ Git snapshots cannot recover the author's original keystrokes, edit ordering wit
 
 These lines must also appear verbatim in the implementation plan.
 
-- Target: desktop VS Code 1.100 or later; local, trusted Git workspaces only; macOS first, with Windows and Linux compatibility checks before claiming support.
+- Target: desktop VS Code 1.137 or later; local, trusted Git workspaces only; macOS first, with Windows and Linux compatibility checks before claiming support.
 - Toolchain: TypeScript, Node.js 22 or later for development checks, Git 2.45 or later, and the Node.js runtime provided by VS Code for execution.
 - Runtime dependencies: none beyond VS Code and the installed Git executable; use Node.js and browser standard APIs.
 - Input isolation: no operating-system mouse events, keyboard injection, focus stealing, or source-editor edits.
@@ -204,3 +204,7 @@ Benchmark a reproducible generated history at 100 and 1,000 commits with the sam
 ## Delivery scope
 
 Implement one extension with standard APIs, a streaming Git reader, a small playback model, an owned sparse store, and a plain webview. Produce a locally installable VSIX after checks. No server, database, cloud service, LLM-based typing, native input driver, custom editable editor, or VM is required for this version. Add a richer editor surface, full repository export, or additional history traversal modes only when a concrete requirement justifies their resource cost.
+
+## Implementation evidence — 2026-09-10
+
+Implemented and locally packaged on `feat/isolated-replay`. Runtime floor was raised to the tested VS Code 1.137.0. Keyed scratch data and metadata use a flat owned session directory. See [README.md](../../../README.md) for controls, measured scaling, package smoke evidence and unverified acceptance checks.

@@ -5,22 +5,41 @@
   "version": "0.1.0",
   "publisher": "trackskipper-local",
   "license": "MIT",
-  "engines": { "vscode": "^1.100.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.137.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./dist/extension.js",
-  "extensionKind": ["workspace"],
+  "extensionKind": [
+    "workspace"
+  ],
   "capabilities": {
-    "untrustedWorkspaces": { "supported": false },
-    "virtualWorkspaces": { "supported": false }
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
   },
   "contributes": {
-    "commands": [{ "command": "gitReplay.open", "title": "Git Replay: Open" }],
+    "commands": [
+      {
+        "command": "gitReplay.open",
+        "title": "Git Replay: Open"
+      }
+    ],
     "configuration": {
       "title": "Git Replay",
       "properties": {
         "gitReplay.storageQuotaMiB": {
-          "type": "integer", "default": 1024, "minimum": 16, "maximum": 20480,
-          "scope": "application", "description": "Maximum storage for the replay session, in MiB."
+          "type": "integer",
+          "default": 1024,
+          "minimum": 16,
+          "maximum": 20480,
+          "scope": "application",
+          "description": "Maximum storage for the replay session, in MiB."
         }
       }
     }

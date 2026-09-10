@@ -21,11 +21,13 @@ export type Totals = {
 };
 export type FileRecord = {
   ordinal: number; change: Change;
+  subject?: string;
   kind: 'text' | 'snapshot' | 'metadata';
   edits: Edit[]; phases: Phase[]; weight: number; reason: string | null;
 };
 export type MilestoneRecord = {
   ordinal: number; kind: 'milestone'; commitOid: string;
+  subject?: string;
   phases: Phase[]; weight: number;
 };
 export type RecordEntry = FileRecord | MilestoneRecord;
@@ -33,6 +35,7 @@ export type Plan = {
   version: 1; id: string; root: string; repo: string;
   startOid: string; endOid: string; baseOid: string | null;
   recordsPath: string; totals: Totals; timing: Timing;
+  summary?: { commits: number; animated: number; snapshots: number; bytes: number };
 };
 export type Position = {
   recordOffset: number; phaseIndex: number; phaseElapsedMs: number;
@@ -40,6 +43,7 @@ export type Position = {
 };
 export type Checkpoint = {
   version: 1; planId: string; completedOffset: number;
+  playbackElapsedMs?: number;
   pausedPosition: Position | null; timing: Timing;
   status: 'paused' | 'stopped' | 'complete';
 };
