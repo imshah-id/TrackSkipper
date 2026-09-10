@@ -1,88 +1,188 @@
 (() => {
   'use strict';
-  const api = acquireVsCodeApi();
-  let sessionId = document.body.dataset.session, state = {}, animation, pointerX = 100, pointerY = 100, phaseKey = '';
-  const $ = id => document.getElementById(id);
+  const api = acquireVsCodeApi(), $ = id => document.getElementById(id);
+  const draft = api.getState() || {};
+  let sessionId = document.body.dataset.session, state = {}, setup = { loading: true, repositories: [], commits: [] };
+  let selectedCommit = draft.selectedCommit || null, selectionKey = draft.selectionKey || '', timingMode = 'duration', editingSetup = !!draft.editingSetup;
   const send = (type, values = {}) => api.postMessage({ type, sessionId, ...values });
   const time = ms => { const seconds = Math.max(0, Math.floor((ms || 0) / 1000)); return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, '0')).join(':'); };
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
+  function saveDraft() {
+    api.setState({ selectedCommit, selectionKey, timingMode, editingSetup, hours: $('hours').value,
+      typing: $('setup-typing').value, pointer: $('setup-pointer').value, search: $('commit-search').value.slice(0, 256) });
+  }
+  const icon = path => {
+    const kind = path.split('.').pop().toLowerCase().replace(/x$/, ''), node = document.createElement('span');
+    node.className = 'file-icon'; node.dataset.kind = kind; node.setAttribute('aria-hidden', 'true');
+    node.textContent = ({ ts: 'TS', js: 'JS', json: '{}', md: 'M↓', css: '#', py: 'Py', html: '◇' })[kind] || '◇'; return node;
+  };
+
+  function renderSelection() {
+    $('selected-commit').textContent = selectedCommit ? `${selectedCommit.oid.slice(0, 7)}  ${selectedCommit.subject}` : 'Choose a starting commit';
+    $('end-commit').textContent = setup.endOid?.slice(0, 7) || '—';
+    $('selection-hint').textContent = selectedCommit ? (selectedCommit.oid === setup.endOid ? 'Replay the latest commit.' : 'Replay the selected commit and every commit after it.') : 'Choose a repository and a starting commit.';
+    const busy = setup.loading || state.status === 'preparing';
+    $('start-replay').disabled = busy || !setup.commits.length || !selectedCommit || !setup.selectedRepositoryId || !setup.endOid;
+    $('start-replay').textContent = state.status === 'preparing' ? 'Preparing…' : 'Start replay';
+    $('cancel-prepare').hidden = state.status !== 'preparing' || !state.canCancelPreparation;
+    $('back').hidden = !state.configured; $('back').disabled = state.status === 'preparing';
+    $('setup-error').textContent = setup.error || ''; $('setup-error').hidden = !setup.error;
+  }
+  function renderCommits() {
+    const query = $('commit-search').value.trim().toLowerCase();
+    const commits = setup.commits.filter(commit => `${commit.oid} ${commit.subject}`.toLowerCase().includes(query));
+    $('commits').replaceChildren(...commits.map(commit => {
+      const label = document.createElement('label'), radio = document.createElement('input'), description = document.createElement('span'), title = document.createElement('span'), meta = document.createElement('span');
+      label.className = 'commit-option'; radio.type = 'radio'; radio.name = 'start-commit'; radio.value = commit.oid; radio.checked = selectedCommit?.oid === commit.oid; radio.disabled = setup.loading;
+      description.className = 'commit-description'; title.className = 'commit-title'; title.textContent = commit.subject || '(no commit message)'; title.title = commit.subject;
+      meta.className = 'commit-meta'; meta.textContent = commit.oid.slice(0, 7) + (commit.oid === setup.endOid ? ' · latest' : '');
+      description.append(title, meta); label.append(radio, description);
+      radio.addEventListener('change', () => { selectedCommit = commit; renderSelection(); saveDraft(); }); return label;
+    }));
+    if (!commits.length) {
+      const empty = document.createElement('p'); empty.className = 'list-empty';
+      empty.textContent = setup.loading ? 'Loading commits…' : query ? 'No matches on this page. Try another search or load older commits.' : 'Choose a repository to load its commits.';
+      $('commits').append(empty);
+    }
+    $('commit-count').textContent = `${setup.commits.length} loaded`;
+    $('latest-commits').disabled = setup.loading || !setup.commits.length || setup.commits[0]?.oid === setup.endOid;
+    $('older-commits').disabled = setup.loading || !setup.nextCursor;
+  }
+  function renderSetup() {
+    const repository = setup.repositories.find(item => item.id === setup.selectedRepositoryId);
+    const key = `${setup.selectedRepositoryId}:${setup.endOid}`;
+    if (!setup.loading) {
+      if (key !== selectionKey) { selectionKey = key; selectedCommit = null; $('commit-search').value = ''; }
+      if (!selectedCommit && setup.commits.length) selectedCommit = setup.commits[0];
+    }
+    $('repository').replaceChildren(...setup.repositories.map(item => { const option = document.createElement('option'); option.value = item.id; option.textContent = `${item.name}  ·  ${item.branch}`; return option; }));
+    if (!setup.repositories.length) { const option = document.createElement('option'); option.textContent = setup.loading ? 'Finding repositories…' : 'No repository found'; $('repository').append(option); }
+    if (repository) $('repository').value = repository.id;
+    $('repository').disabled = setup.loading || !setup.repositories.length;
+    $('refresh').disabled = $('browse-repository').disabled = setup.loading;
+    $('repository-path').textContent = repository?.path || (setup.loading ? 'Looking in your open workspace…' : 'Open a Git workspace, or browse for a repository folder.');
+    $('commit-search').disabled = setup.loading || !setup.commits.length;
+    renderCommits(); renderSelection();
+    if (!setup.loading) saveDraft();
+  }
+  function setTimingMode(mode) {
+    timingMode = mode;
+    $('mode-duration').setAttribute('aria-pressed', String(mode === 'duration')); $('mode-speed').setAttribute('aria-pressed', String(mode === 'speed'));
+    $('duration-settings').hidden = mode !== 'duration'; $('speed-settings').hidden = mode !== 'speed'; $('hours').disabled = mode !== 'duration';
+  }
+
+  // ponytail: tokenize only the bounded visible window; use a full grammar engine if exact language/theme parity becomes necessary.
+  function tokens(line, language, block) {
+    if (language === 'md' && /^\s*#/.test(line)) return { parts: [[line, 'heading']], block: false };
+    if (!/^(ts|tsx|js|jsx|mjs|cjs|json|py|css|scss|c|cpp|h|java|go|rs|sh|rb|yaml|yml)$/.test(language)) return { parts: [[line, '']], block: false };
+    const pattern = /\/\/.*|\/\*.*?\*\/|\/\*.*|(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|`(?:\\.|[^`\\])*`?)|\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?)\b|[A-Za-z_$][\w$]*|#[^\n]*|[^\w\s]/g;
+    const parts = []; let end = 0;
+    if (block) { const close = line.indexOf('*/'); end = close < 0 ? line.length : close + 2; parts.push([line.slice(0, end), 'comment']); block = close < 0; }
+    pattern.lastIndex = end;
+    for (let match; (match = pattern.exec(line));) {
+      if (match.index > end) parts.push([line.slice(end, match.index), '']);
+      const value = match[0]; let kind = '';
+      if (value.startsWith('//') || value.startsWith('/*') || value[0] === '#' && /^(py|sh|rb|yaml|yml)$/.test(language)) { kind = 'comment'; if (value.startsWith('/*')) block = !value.endsWith('*/'); }
+      else if (/^["'`]/.test(value)) kind = 'string';
+      else if (/^\d/.test(value)) kind = 'number';
+      else if (/^(const|let|var|function|class|interface|type|enum|new|this|true|false|null|undefined|def|None|True|False|self|public|private|static|void|int|str|boolean|number|string)$/.test(value)) kind = 'declaration';
+      else if (/^(import|from|export|default|async|await|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|extends|implements|of|in|yield|as|with|raise|pass)$/.test(value)) kind = 'keyword';
+      else if (/^\s*\(/.test(line.slice(pattern.lastIndex))) kind = 'function';
+      else if (/^[A-Z][A-Za-z]+/.test(value)) kind = 'type';
+      parts.push([value, kind]); end = pattern.lastIndex;
+    }
+    if (end < line.length) parts.push([line.slice(end), '']);
+    return { parts, block };
+  }
   const rows = Array.from({ length: 120 }, () => {
     const row = document.createElement('div'), number = document.createElement('span'), content = document.createElement('span');
-    row.className = 'code-row'; number.className = 'line-number'; content.className = 'line-content';
-    row.append(number, content); return { row, number, content };
+    row.className = 'code-row'; number.className = 'line-number'; content.className = 'line-content'; row.append(number, content);
+    return { row, number, content, key: '', tokenKey: '', parsed: null };
   });
   $('code').append(...rows.map(item => item.row));
-  let lastLines = null, lastCaret = '', lastFirstLine = -1, lastFiles = '', lastTabs = '';
   function renderCode(frame) {
     if (!frame) return;
-    const caretKey = JSON.stringify(frame.caret);
-    if (frame.lines === lastLines && caretKey === lastCaret && lastFirstLine === frame.firstLine) return;
+    const language = state.activePath?.split('.').pop().toLowerCase() || ''; let block = false;
     rows.forEach((item, index) => {
-      item.row.hidden = index >= frame.lines.length;
-      if (item.row.hidden) return;
+      item.row.hidden = index >= frame.lines.length; if (item.row.hidden) return;
       item.number.textContent = String(frame.firstLine + index + 1);
-      const line = frame.lines[index];
-      item.row.classList.toggle('active', frame.caret?.row === index);
-      if (frame.caret?.row === index) {
-        const cursor = document.createElement('span'); cursor.className = 'caret';
-        item.content.replaceChildren(document.createTextNode(line.slice(0, frame.caret.column)), cursor, document.createTextNode(line.slice(frame.caret.column)));
-      } else if (item.content.textContent !== line || item.content.querySelector('.caret')) item.content.textContent = line;
+      const line = frame.lines[index], column = frame.caret?.row === index ? frame.caret.column : -1;
+      item.row.classList.toggle('active', column >= 0);
+      const tokenKey = JSON.stringify([line, language, block]);
+      if (item.tokenKey !== tokenKey) { item.tokenKey = tokenKey; item.parsed = tokens(line, language, block); }
+      const parsed = item.parsed; block = parsed.block;
+      const key = `${column}:${tokenKey}`; if (item.key === key) return; item.key = key;
+      const children = []; let offset = 0, inserted = false;
+      const append = (text, kind) => { if (!text) return; const node = document.createElement('span'); if (kind) node.className = `token-${kind}`; node.textContent = text; children.push(node); };
+      for (const [text, kind] of parsed.parts) {
+        if (!inserted && column >= offset && column <= offset + text.length) {
+          const split = column - offset; append(text.slice(0, split), kind);
+          const caret = document.createElement('span'); caret.className = 'caret'; children.push(caret); inserted = true; append(text.slice(split), kind);
+        } else append(text, kind);
+        offset += text.length;
+      }
+      if (column >= 0 && !inserted) { const caret = document.createElement('span'); caret.className = 'caret'; children.push(caret); }
+      item.content.replaceChildren(...children);
     });
-    lastLines = frame.lines; lastCaret = caretKey; lastFirstLine = frame.firstLine;
   }
+  let animation, pointerX = 100, pointerY = 100, phaseKey = '';
   function stopPointer() { if (animation) cancelAnimationFrame(animation); animation = undefined; $('virtual-pointer').classList.remove('clicking'); }
   function pointer() {
-    if (motion.matches || state.status !== 'running' || !state.phase || document.hidden) { stopPointer(); $('virtual-pointer').hidden = true; phaseKey = ''; return; }
+    if (motion.matches || state.status !== 'running' || !state.phase || document.hidden || !$('setup').hidden) { stopPointer(); $('virtual-pointer').hidden = true; phaseKey = ''; return; }
     const key = `${state.recordNumber}:${state.phase.kind}:${state.phase.editIndex}:${state.phase.target}`;
-    if (key === phaseKey) return;
-    phaseKey = key; stopPointer();
+    if (key === phaseKey) return; phaseKey = key; stopPointer();
     const marker = $('virtual-pointer'); marker.hidden = false;
     const target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('tabs') : document.querySelector('.caret') || $('code');
-    const rect = target.getBoundingClientRect();
-    const targetX = Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2)));
-    const targetY = Math.max(52, Math.min(innerHeight - 85, rect.top + 8));
-    const startX = pointerX, startY = pointerY;
-    const moving = state.phase.kind === 'move' || state.phase.kind === 'scroll';
-    const duration = moving ? Math.max(1, state.phaseDurationMs - state.phaseElapsedMs) : 0;
-    const began = performance.now(); let previous = -Infinity;
+    const rect = target.getBoundingClientRect(), targetX = Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2))), targetY = Math.max(5, Math.min(innerHeight - 32, rect.top + 8));
+    const startX = pointerX, startY = pointerY, moving = state.phase.kind === 'move' || state.phase.kind === 'scroll';
+    const duration = moving ? Math.max(1, state.phaseDurationMs - state.phaseElapsedMs) : 0, began = performance.now(); let previous = -Infinity;
     const tick = now => {
-      if (now - previous < 1000 / 30) { animation = requestAnimationFrame(tick); return; }
-      previous = now;
+      if (now - previous < 1000 / 30) { animation = requestAnimationFrame(tick); return; } previous = now;
       const t = duration ? Math.min(1, (now - began) / duration) : 1, eased = t * t * (3 - 2 * t);
       pointerX = startX + (targetX - startX) * eased; pointerY = startY + (targetY - startY) * eased;
       marker.style.transform = `translate(${pointerX}px, ${pointerY}px)`;
-      if (t < 1) animation = requestAnimationFrame(tick);
-      else { animation = undefined; marker.classList.toggle('clicking', state.phase.kind === 'click'); }
+      if (t < 1) animation = requestAnimationFrame(tick); else { animation = undefined; marker.classList.toggle('clicking', state.phase.kind === 'click'); }
     };
     animation = requestAnimationFrame(tick);
   }
+  let lastFiles = '', lastTabs = '', lastEditor = '';
   function render() {
-    $('repository').textContent = state.repository || 'No repository selected';
-    $('start-commit').textContent = state.start?.slice(0, 12) || 'Select a starting commit';
-    $('end-commit').textContent = state.end?.slice(0, 12) || 'Latest commit';
-    $('notice').textContent = state.notice || ''; $('notice').hidden = !state.notice; $('notice').classList.toggle('error', !!state.isError);
     const running = state.status === 'running', preparing = state.status === 'preparing';
+    if (running && editingSetup) { editingSetup = false; saveDraft(); }
+    const showingSetup = !state.configured || editingSetup;
+    $('setup').hidden = !showingSetup; $('playback').hidden = showingSetup;
+    const showNotice = state.isError || preparing || state.status === 'complete';
+    $('notice').textContent = state.notice || ''; $('notice').hidden = !showNotice || !state.notice; $('notice').classList.toggle('error', !!state.isError);
+    renderSelection();
+    if (showingSetup) { pointer(); return; }
+    const editorKey = JSON.stringify(state.editor);
+    if (state.editor && editorKey !== lastEditor) {
+      lastEditor = editorKey; const style = document.documentElement.style, editor = state.editor;
+      const size = Math.max(6, Math.min(100, Number(editor.fontSize) || 14)), height = Number(editor.lineHeight) || 0;
+      style.setProperty('--mono', editor.fontFamily); style.setProperty('--code-size', `${size}px`); style.setProperty('--code-weight', editor.fontWeight);
+      style.setProperty('--line-height', `${height === 0 ? Math.round(size * 1.5) : height < 8 ? size * height : height}px`); style.setProperty('--tab-size', String(editor.tabSize));
+    }
     const fixed = state.timing?.mode === 'speed', editable = fixed && state.status === 'paused';
-    $('timing-mode').textContent = fixed ? 'Fixed typing speed' : 'Finish in duration';
-    $('duration-label').textContent = time(state.totalMs);
+    $('timing-mode').textContent = fixed ? 'Fixed speed' : `Duration · ${time(state.totalMs)}`;
     $('typing').disabled = $('pointer-speed').disabled = !editable;
     if (fixed) { $('typing').value = state.timing.charactersPerSecond; $('pointer-speed').value = state.timing.pointerMultiplier; }
-    $('typing-value').textContent = fixed ? `${state.timing.charactersPerSecond} char/s` : 'Automatic';
-    $('pointer-value').textContent = fixed ? `${state.timing.pointerMultiplier}×` : 'Automatic';
-    $('timing-hint').textContent = fixed ? 'Pause to adjust speed. Duration updates with your settings.' : 'Typing and pauses fit the duration. Manual pauses extend completion.';
+    $('typing-value').textContent = fixed ? `${state.timing.charactersPerSecond} char/s` : 'Automatic'; $('pointer-value').textContent = fixed ? `${state.timing.pointerMultiplier}×` : 'Automatic';
+    $('timing-hint').textContent = fixed ? 'Pause to adjust speed; resume when ready.' : 'Typing and pauses fit the selected duration.';
     $('empty').hidden = !!state.frame; $('code-scroll').hidden = !state.frame;
-    $('configure-empty').textContent = state.configured ? 'Configure another replay →' : 'Configure replay →';
-    $('configure').disabled = $('configure-empty').disabled = running || preparing;
+    $('empty-message').textContent = state.status === 'complete' ? 'Replay complete. This range contains no animated text.' : 'Opening the first file…';
+    $('new-replay').disabled = preparing || running;
     $('play').disabled = !state.configured || preparing || state.status === 'complete';
     $('play').textContent = running ? 'Ⅱ Pause' : state.status === 'ready' ? '▶ Start' : '▶ Resume';
-    $('stop').disabled = !state.configured || ['stopped', 'complete', 'ready'].includes(state.status);
+    $('stop').disabled = !state.configured || preparing || ['stopped', 'complete', 'ready'].includes(state.status);
     $('restart').disabled = $('clear').disabled = !state.configured || preparing || running;
     $('follow').disabled = !state.configured;
     $('elapsed').textContent = time(state.elapsedMs); $('total').textContent = time(state.totalMs);
     $('progress').value = state.totalMs ? Math.min(1, state.elapsedMs / state.totalMs) : 0;
     $('status').textContent = state.status || 'Ready'; $('status').dataset.status = state.status || 'ready';
-    $('file-path').textContent = state.activePath || 'Git Replay'; $('commit-subject').textContent = state.subject || (state.status === 'complete' ? 'Replay complete' : state.configured ? 'Prepared and ready to replay' : 'Ready when you are');
-    $('phase').textContent = state.status === 'complete' ? 'Complete' : state.phase ? `${state.phase.kind} · ${state.recordNumber}/${state.recordCount}` : 'No active replay';
+    $('workspace-name').textContent = (state.repository || 'Replay').toUpperCase();
+    $('file-path').textContent = state.activePath?.replaceAll('/', '  ›  ') || 'Git Replay'; $('file-path').title = state.activePath || '';
+    $('commit-subject').textContent = state.subject || 'Git Replay';
+    $('phase').textContent = state.status === 'complete' ? 'Complete' : `Change ${state.recordNumber || 0} of ${state.recordCount || 0}`;
     $('file-count').textContent = String(state.files?.length || 0);
     const filesKey = JSON.stringify([state.files, state.activePath, running]);
     if (filesKey !== lastFiles) {
@@ -90,25 +190,51 @@
       $('files').replaceChildren(...(state.files || []).map(file => {
         const button = document.createElement('button'), tag = document.createElement('span'), name = document.createElement('span');
         button.className = `file-button${file.label === state.activePath ? ' selected' : ''}`; button.title = file.label; button.disabled = running;
-        tag.className = 'file-tag'; tag.textContent = file.change; name.textContent = file.label;
-        button.append(tag, name); button.addEventListener('click', () => send('browse', { offset: file.offset })); return button;
+        tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; name.className = 'file-name'; name.textContent = file.label;
+        button.append(icon(file.label), name, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); return button;
       }));
     }
     const tabsKey = JSON.stringify([state.tabs, state.activePath, running]);
     if (tabsKey !== lastTabs) {
       lastTabs = tabsKey;
-      if (state.tabs?.length) $('tabs').replaceChildren(...state.tabs.map(tab => {
-        const button = document.createElement('button'); button.className = `tab${tab.label === state.activePath ? ' selected' : ''}`;
-        button.textContent = tab.label.split('/').pop(); button.title = tab.label; button.disabled = running;
+      $('tabs').replaceChildren(...(state.tabs || []).map(tab => {
+        const button = document.createElement('button'), label = document.createElement('span');
+        button.className = `tab${tab.label === state.activePath ? ' selected' : ''}`; label.textContent = tab.label.split('/').pop(); button.title = tab.label; button.disabled = running;
+        button.setAttribute('aria-current', String(tab.label === state.activePath)); button.append(icon(tab.label), label);
         button.addEventListener('click', () => send('browse', { offset: tab.offset })); return button;
       }));
-      else { const tab = document.createElement('span'); tab.className = 'tab empty-tab'; tab.textContent = 'Preview'; $('tabs').replaceChildren(tab); }
+      if (!state.tabs?.length) { const tab = document.createElement('span'); tab.className = 'tab empty-tab'; tab.textContent = 'Preview'; $('tabs').append(tab); }
     }
-    $('previous-files').disabled = !state.previousPage; $('next-files').disabled = state.nextPage == null;
+    $('previous-files').disabled = running || !state.previousPage; $('next-files').disabled = running || state.nextPage == null;
     renderCode(state.frame); pointer();
   }
-  window.addEventListener('message', event => { if (event.data?.type !== 'state') return; state = event.data; sessionId = state.sessionId; render(); });
-  for (const id of ['configure', 'configure-empty']) $(id).addEventListener('click', () => send('configure'));
+  window.addEventListener('message', event => {
+    if (event.data?.type === 'state') { state = event.data; sessionId = state.sessionId; render(); }
+    else if (event.data?.type === 'setup' && event.data.sessionId === sessionId) { setup = event.data.setup; renderSetup(); }
+  });
+  $('repository').addEventListener('change', () => send('repository', { repositoryId: $('repository').value }));
+  $('refresh').addEventListener('click', () => send('discover')); $('browse-repository').addEventListener('click', () => send('repositoryBrowse'));
+  $('commit-search').addEventListener('input', () => { renderCommits(); saveDraft(); });
+  $('latest-commits').addEventListener('click', () => { $('commit-search').value = ''; send('commits', { cursor: null }); });
+  $('older-commits').addEventListener('click', () => { $('commit-search').value = ''; send('commits', { cursor: setup.nextCursor }); });
+  $('mode-duration').addEventListener('click', () => { setTimingMode('duration'); saveDraft(); }); $('mode-speed').addEventListener('click', () => { setTimingMode('speed'); saveDraft(); });
+  function updateTiming() {
+    document.querySelectorAll('[data-hours]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.hours) === Number($('hours').value))));
+    $('setup-typing-value').textContent = `${$('setup-typing').value} char/s`; $('setup-pointer-value').textContent = `${$('setup-pointer').value}×`;
+    saveDraft();
+  }
+  document.querySelectorAll('[data-hours]').forEach(button => button.addEventListener('click', () => { $('hours').value = button.dataset.hours; updateTiming(); }));
+  for (const id of ['hours', 'setup-typing', 'setup-pointer']) $(id).addEventListener('input', updateTiming);
+  $('setup-form').addEventListener('submit', event => {
+    event.preventDefault(); if ($('start-replay').disabled || !selectedCommit) return;
+    const timing = timingMode === 'duration' ? { mode: 'duration', durationMs: Number($('hours').value) * 3600000 } : { mode: 'speed', charactersPerSecond: Number($('setup-typing').value), pointerMultiplier: Number($('setup-pointer').value) };
+    $('start-replay').disabled = true;
+    send('prepare', { repositoryId: setup.selectedRepositoryId, startOid: selectedCommit.oid, endOid: setup.endOid, timing });
+  });
+  $('cancel-prepare').addEventListener('click', () => send('stop'));
+  $('new-replay').addEventListener('click', () => { editingSetup = true; render(); renderSetup(); });
+  $('back').addEventListener('click', () => { editingSetup = false; saveDraft(); render(); });
+  $('settings').addEventListener('click', () => { $('playback-settings').hidden = !$('playback-settings').hidden; $('settings').setAttribute('aria-expanded', String(!$('playback-settings').hidden)); });
   $('play').addEventListener('click', () => send(state.status === 'running' ? 'pause' : state.status === 'ready' ? 'start' : 'resume'));
   for (const id of ['stop', 'restart', 'clear', 'follow']) $(id).addEventListener('click', () => send(id));
   const changeSpeed = () => send('speed', { charactersPerSecond: Number($('typing').value), pointerMultiplier: Number($('pointer-speed').value) });
@@ -129,5 +255,7 @@
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopPointer(); else { phaseKey = ''; pointer(); } });
   motion.addEventListener('change', () => { phaseKey = ''; pointer(); });
   window.addEventListener('resize', () => { phaseKey = ''; pointer(); });
+  $('hours').value = draft.hours ?? '6'; $('setup-typing').value = draft.typing ?? '24'; $('setup-pointer').value = draft.pointer ?? '1'; $('commit-search').value = draft.search ?? '';
+  setTimingMode(draft.timingMode === 'speed' ? 'speed' : 'duration'); updateTiming();
   send('ready');
 })();

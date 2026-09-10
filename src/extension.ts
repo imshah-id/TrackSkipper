@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { commitPage, disposeGit, gitText, objectInfo } from './git';
 import { preparePlan, readRecords, textBlob } from './plan';
@@ -8,7 +8,7 @@ import { createReplay, systemClock } from './replay';
 import { createTextView, frameAt } from './view';
 import { createStore, openStore, Store } from './store';
 import { panelHtml, validCommand, PanelCommand } from './panel';
-import { Checkpoint, Frame, Phase, Plan, RecordEntry, Timing } from './types';
+import { Checkpoint, Frame, Phase, Plan } from './types';
 import { validateTiming } from './timing';
 
 let shutdown: (() => Promise<void>) | undefined;
@@ -25,9 +25,23 @@ export function activate(context: vscode.ExtensionContext): void {
   let activePath = '', lastPost = 0, postTimer: NodeJS.Timeout | undefined;
   let commands = Promise.resolve();
   let opening: Promise<void> | undefined;
+  type Repository = { id: string; name: string; path: string; branch: string };
+  const setup: { loading: boolean; repositories: Repository[]; selectedRepositoryId: string | null;
+    commits: Array<{ oid: string; subject: string }>; nextCursor: string | null; endOid: string | null; error: string | null } = {
+    loading: false, repositories: [], selectedRepositoryId: null, commits: [], nextCursor: null, endOid: null, error: null,
+  };
+  let discovered = false;
+  let repositoryHint: vscode.Uri | undefined;
+  const browsedRoots: string[] = [];
   const quota = () => vscode.workspace.getConfiguration('gitReplay').get<number>('storageQuotaMiB', 1024) * 1024 ** 2;
   const sessionId = () => plan?.id ?? 'idle';
   const label = (encoded: string) => Buffer.from(encoded, 'base64').toString('utf8').replace(/[\x00-\x1f\x7f]/g, character => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`).slice(0, 1024);
+  const editorSettings = () => {
+    const configuration = vscode.workspace.getConfiguration('editor', vscode.window.activeTextEditor?.document.uri);
+    return { fontFamily: configuration.get<string>('fontFamily', 'monospace'), fontSize: configuration.get<number>('fontSize', 14),
+      fontWeight: configuration.get<string>('fontWeight', 'normal'), lineHeight: configuration.get<number>('lineHeight', 0), tabSize: configuration.get<number>('tabSize', 4) };
+  };
+  let editor = editorSettings();
 
   function send(force = false): void {
     if (!panel?.visible) return;
@@ -36,15 +50,97 @@ export function activate(context: vscode.ExtensionContext): void {
     if (postTimer) clearTimeout(postTimer); postTimer = undefined; lastPost = performance.now();
     const state = replay?.getState();
     const status = busy ? 'preparing' : error ? 'error' : state?.status ?? (recovery?.status === 'complete' ? 'complete' : recovery ? 'paused' : 'ready');
-    void panel.webview.postMessage({ type: 'state', sessionId: sessionId(), status, notice: error || notice, isError: !!error,
+    void panel.webview.postMessage({ type: 'state', sessionId: sessionId(), status, notice: error || notice, isError: !!error, canCancelPreparation: !!preparation,
       configured: !!plan, repository: plan ? path.basename(plan.repo) : '', start: plan?.startOid, end: plan?.endOid,
       timing: state?.timing ?? recovery?.timing ?? plan?.timing, totalMs: state?.totalMs ?? (plan?.timing.mode === 'duration' ? plan.timing.durationMs : plan?.totals.preferredMs ?? 0),
       elapsedMs: state?.position.playbackElapsedMs ?? recovery?.pausedPosition?.playbackElapsedMs ?? recovery?.playbackElapsedMs ?? 0,
       summary: plan?.summary, recordNumber: (state?.record?.ordinal ?? -1) + 1, recordCount: plan?.totals.records ?? 0,
       subject: state?.record?.subject ?? '', frame, phase, phaseElapsedMs, phaseDurationMs,
-      files: filePage, previousPage: pageOffset > commitStart, nextPage, tabs: recent, activePath });
+      files: filePage, previousPage: pageOffset > commitStart, nextPage, tabs: recent, activePath, editor });
   }
   function report(cause: unknown): void { error = cause instanceof Error ? cause.message : String(cause); if (!panel) void vscode.window.showErrorMessage(error); send(true); }
+
+  function sendSetup(): void {
+    if (panel?.visible) void panel.webview.postMessage({ type: 'setup', sessionId: sessionId(), setup });
+  }
+
+  async function setupAction(action: () => Promise<void>): Promise<void> {
+    setup.loading = true; setup.error = null; sendSetup();
+    try {
+      if (!vscode.workspace.isTrusted || vscode.env.remoteName) throw new Error('Open a trusted local Git workspace to use Git Replay.');
+      await action();
+    } catch (cause) { setup.error = (cause instanceof Error ? cause.message : String(cause)).slice(0, 4096); }
+    finally { setup.loading = false; sendSetup(); }
+  }
+
+  async function loadCommits(cursor: string | null): Promise<void> {
+    const repository = setup.repositories.find(item => item.id === setup.selectedRepositoryId);
+    if (!repository) throw new Error('Choose a repository or browse for a folder.');
+    if (cursor !== null && cursor !== setup.nextCursor) throw new Error('Commit page expired. Load the latest commits and try again.');
+    const signal = new AbortController().signal;
+    setup.commits = []; setup.nextCursor = null;
+    if (!setup.endOid) {
+      try { setup.endOid = await gitText(repository.path, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'], signal); }
+      catch (cause) { throw new Error(`Cannot read this repository's latest commit. Create a commit or browse for another folder. ${cause instanceof Error ? cause.message : String(cause)}`); }
+    }
+    const commits = await commitPage(repository.path, cursor ?? setup.endOid, signal);
+    setup.commits = commits.slice(0, 100).map(commit => ({ oid: commit.oid, subject: commit.subject.slice(0, 4096) }));
+    setup.nextCursor = commits.at(99)?.parentOid ?? commits.at(-1)?.parentOid ?? null;
+    if (!setup.commits.length) throw new Error('This repository has no commits. Create a commit or browse for another folder.');
+  }
+
+  async function selectRepository(repositoryId: string): Promise<void> {
+    if (!setup.repositories.some(repository => repository.id === repositoryId)) throw new Error('Repository selection expired. Refresh repositories or browse for a folder.');
+    setup.selectedRepositoryId = repositoryId; setup.endOid = null; setup.commits = []; setup.nextCursor = null;
+    await loadCommits(null);
+  }
+
+  async function discover(): Promise<void> {
+    discovered = true;
+    const active = vscode.window.activeTextEditor?.document.uri ?? repositoryHint;
+    const candidates = active?.scheme === 'file' ? [path.dirname(active.fsPath)] : [];
+    candidates.push(...(vscode.workspace.workspaceFolders ?? []).filter(folder => folder.uri.scheme === 'file').map(folder => folder.uri.fsPath));
+    try {
+      const git = vscode.extensions.getExtension<{ getAPI(version: number): { repositories: Array<{ rootUri: vscode.Uri }> } }>('vscode.git');
+      const api = git && (git.isActive ? git.exports : await git.activate()).getAPI(1);
+      candidates.push(...(api?.repositories ?? []).filter(repository => repository.rootUri.scheme === 'file').map(repository => repository.rootUri.fsPath));
+    } catch { /* Workspace and active-editor roots also work when the Git extension is disabled. */ }
+    candidates.push(...browsedRoots);
+    const previous = setup.repositories, repositories: Repository[] = [];
+    let failure = '';
+    for (const candidate of [...new Set(candidates)].slice(0, 100)) {
+      try {
+        const signal = new AbortController().signal;
+        const root = await realpath(await gitText(candidate, ['rev-parse', '--show-toplevel'], signal));
+        if (repositories.some(repository => repository.path === root)) continue;
+        let branch = 'Detached HEAD';
+        try { branch = await gitText(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], signal); } catch { /* Detached HEAD has no symbolic branch. */ }
+        repositories.push({ id: previous.find(repository => repository.path === root)?.id ?? randomBytes(16).toString('hex'), name: path.basename(root), path: root, branch: branch.slice(0, 1024) });
+      } catch (cause) { failure = cause instanceof Error ? cause.message : String(cause); }
+    }
+    setup.repositories = repositories; setup.selectedRepositoryId = null; setup.commits = []; setup.nextCursor = null; setup.endOid = null;
+    if (!repositories.length) throw new Error(`No Git repository found. Browse for a repository folder and check that Git is installed.${failure ? ` ${failure}` : ''}`);
+    await selectRepository(repositories[0].id);
+  }
+
+  async function browseRepository(): Promise<void> {
+    const folders = await vscode.window.showOpenDialog({ canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: 'Use repository', title: 'Choose a Git repository folder' });
+    const folder = folders?.[0];
+    if (!folder) return;
+    if (folder.scheme !== 'file') throw new Error('Choose a local Git repository folder.');
+    const signal = new AbortController().signal;
+    const root = await realpath(await gitText(folder.fsPath, ['rev-parse', '--show-toplevel'], signal));
+    let repository = setup.repositories.find(item => item.path === root);
+    if (!repository) {
+      if (setup.repositories.length >= 100) throw new Error('Repository list is full. Close unused workspace folders and refresh repositories.');
+      let branch = 'Detached HEAD';
+      try { branch = await gitText(root, ['symbolic-ref', '--quiet', '--short', 'HEAD'], signal); } catch { /* Detached HEAD. */ }
+      repository = { id: randomBytes(16).toString('hex'), name: path.basename(root), path: root, branch: branch.slice(0, 1024) };
+      setup.repositories.push(repository);
+    }
+    if (!browsedRoots.includes(root)) { browsedRoots.unshift(root); browsedRoots.length = Math.min(browsedRoots.length, 100); }
+    await selectRepository(repository.id);
+  }
 
   async function page(offset: number): Promise<void> {
     if (!plan) return;
@@ -93,65 +189,51 @@ export function activate(context: vscode.ExtensionContext): void {
     replay.setVisible(panel?.visible ?? false);
   }
 
-  async function configure(): Promise<void> {
-    if (!vscode.workspace.isTrusted || vscode.env.remoteName) throw new Error('Open a trusted local Git workspace to use Git Replay.');
-    if (replay?.getState().status === 'running') throw new Error('Pause playback before configuring another session.');
-    const folders = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file') ?? [];
-    if (!folders.length) throw new Error('Open a local Git folder in VS Code first.');
-    const folder = folders.length === 1 ? folders[0] : await vscode.window.showWorkspaceFolderPick({ placeHolder: 'Choose a Git repository for replay' });
-    if (!folder) return;
-    const signal = new AbortController().signal;
-    const repo = await gitText(folder.uri.fsPath, ['rev-parse', '--show-toplevel'], signal);
-    const end = await gitText(repo, ['rev-parse', '--verify', '--end-of-options', 'HEAD^{commit}'], signal);
-    let tip = end, start: string | undefined;
-    while (!start) {
-      const commits = await commitPage(repo, tip, signal);
-      const items = commits.map(commit => ({ label: `$(git-commit) ${commit.oid.slice(0, 8)}  ${commit.subject}`, description: commit.oid === end ? 'Latest commit' : '', oid: commit.oid }));
-      const older = commits.at(-1)?.parentOid;
-      if (older) items.push({ label: '$(chevron-down) Load older commits', description: 'Next 100', oid: 'older' });
-      const selected = await vscode.window.showQuickPick(items, { title: 'Git Replay · Start commit', placeHolder: 'Include this commit through the pinned latest commit (first-parent history)', matchOnDescription: true });
-      if (!selected) return;
-      if (selected.oid === 'older') tip = older!; else start = selected.oid;
-    }
-    const mode = await vscode.window.showQuickPick([{ label: 'Finish in duration', id: 'duration', description: 'Typing and pauses fit your target' }, { label: 'Fixed typing speed', id: 'speed', description: 'Duration is estimated from the changes' }], { title: 'Git Replay · Timing' });
-    if (!mode) return;
-    let timing: Timing;
-    if (mode.id === 'duration') {
-      const hours = await vscode.window.showInputBox({ title: 'Playback duration in hours', value: '6', validateInput: value => Number.isFinite(Number(value)) && Number(value) > 0 && Number(value) <= 720 ? null : 'Enter a number greater than 0 and no more than 720.' });
-      if (hours === undefined) return;
-      timing = { mode: 'duration', durationMs: Number(hours) * 3600000 };
-    } else {
-      const speed = await vscode.window.showInputBox({ title: 'Typing speed (characters per second)', value: '24', validateInput: value => Number.isFinite(Number(value)) && Number(value) >= 1 && Number(value) <= 200 ? null : 'Enter 1–200 characters per second.' });
-      if (speed === undefined) return;
-      timing = { mode: 'speed', charactersPerSecond: Number(speed), pointerMultiplier: 1 };
-    }
+  async function prepare(command: PanelCommand): Promise<void> {
+    const repository = setup.repositories.find(item => item.id === command.repositoryId);
+    if (!repository || command.repositoryId !== setup.selectedRepositoryId || command.endOid !== setup.endOid
+      || !setup.commits.length) throw new Error('Replay selection expired. Choose a repository and start commit again.');
+    validateTiming(command.timing);
+    if (replay?.getState().status === 'running') throw new Error('Pause playback before starting another session.');
     if (store && await vscode.window.showWarningMessage('Replace the current replay session and its scratch files?', { modal: true }, 'Replace session') !== 'Replace session') return;
-    await replay?.dispose(); replay = undefined;
-    if (store) await store.clear();
-    store = undefined; plan = undefined; recovery = null; frame = undefined; recent = []; filePage = []; currentCommit = ''; error = '';
     preparation = new AbortController(); const abort = preparation;
-    busy = true; notice = 'Preparing committed changes…'; send(true);
+    busy = true; error = ''; notice = 'Preparing committed changes…'; send(true);
+    let candidateStore: Store | undefined;
     try {
-      store = await createStore(storageRoot, quota());
-      await context.globalState.update('sessionRoot', store.root);
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Git Replay', cancellable: true }, async (progress, token) => {
+      candidateStore = await createStore(storageRoot, quota());
+      const candidateRoot = candidateStore.root;
+      const candidatePlan = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Git Replay', cancellable: true }, async (progress, token) => {
         const cancellation = token.onCancellationRequested(() => abort.abort(new Error('Preparation cancelled')));
-        try { plan = await preparePlan(repo, start!, end, timing, store!.root, abort.signal, { quotaBytes: quota(), progress: message => { notice = message; progress.report({ message }); send(); } }); }
+        try { return await preparePlan(repository.path, command.startOid!, command.endOid!, command.timing!, candidateRoot, abort.signal, { quotaBytes: quota(), progress: message => { notice = message; progress.report({ message }); send(); } }); }
         finally { cancellation.dispose(); }
       });
-      await store.refreshUsage();
-      notice = `${plan!.summary?.commits} commits · ${plan!.summary?.animated} animated files · ${plan!.summary?.snapshots} snapshot events. Ready to start.`;
-      attachReplay();
-    } catch (cause) {
-      await store?.clear(); store = undefined; plan = undefined; await context.globalState.update('sessionRoot', undefined); throw cause;
-    } finally { preparation = undefined; busy = false; send(true); }
+      await candidateStore.refreshUsage();
+      abort.signal.throwIfAborted();
+      preparation = undefined; notice = 'Starting replay…'; send(true);
+      await replay?.dispose(); replay = undefined;
+      if (store) await store.clear();
+      store = candidateStore; plan = candidatePlan; candidateStore = undefined;
+      await context.globalState.update('sessionRoot', store.root);
+      recovery = null; frame = undefined; recent = []; filePage = []; currentCommit = ''; activePath = ''; browseView = undefined;
+      notice = `${plan.summary?.commits} commits · ${plan.summary?.animated} animated files · ${plan.summary?.snapshots} snapshot events.`;
+      attachReplay(); await replay!.start();
+    } catch (cause) { await candidateStore?.clear(); throw cause; }
+    finally { preparation = undefined; busy = false; send(true); }
   }
 
   async function handle(command: PanelCommand): Promise<void> {
     if (command.sessionId !== sessionId()) return;
     error = '';
-    if (command.type === 'ready') { send(true); return; }
-    if (command.type === 'configure') { await configure(); return; }
+    if (command.type === 'ready') {
+      send(true);
+      if (!discovered) await setupAction(discover); else sendSetup();
+      return;
+    }
+    if (command.type === 'configure' || command.type === 'discover') { await setupAction(discover); return; }
+    if (command.type === 'repository') { await setupAction(() => selectRepository(command.repositoryId!)); return; }
+    if (command.type === 'repositoryBrowse') { await setupAction(browseRepository); return; }
+    if (command.type === 'commits') { await setupAction(() => loadCommits(command.cursor!)); return; }
+    if (command.type === 'prepare') { await setupAction(() => prepare(command)); return; }
     if (!plan || !store) return;
     if (command.type === 'pause') await replay?.pause();
     if (command.type === 'start' || command.type === 'resume') {
@@ -211,6 +293,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   async function openPanel(): Promise<void> {
+    repositoryHint = vscode.window.activeTextEditor?.document.uri ?? repositoryHint;
     if (panel) { panel.reveal(); return; }
     if (!vscode.workspace.isTrusted || vscode.env.remoteName) throw new Error('Git Replay needs a trusted local workspace.');
     if (!plan) {
@@ -229,7 +312,7 @@ export function activate(context: vscode.ExtensionContext): void {
     replay?.setVisible(panel.visible);
     const webview = panel.webview;
     webview.html = panelHtml({ script: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js')).toString(), style: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css')).toString(), cspSource: webview.cspSource, nonce: randomBytes(16).toString('hex'), sessionId: sessionId() });
-    panel.onDidChangeViewState(event => { replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) send(true); });
+    panel.onDidChangeViewState(event => { replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) { send(true); sendSetup(); } });
     panel.onDidDispose(() => { panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
     webview.onDidReceiveMessage((value: unknown) => {
       if (!validCommand(value, sessionId())) return;
@@ -245,6 +328,13 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(vscode.window.registerTreeDataProvider<vscode.TreeItem>('gitReplay.launcher', {
     getTreeItem: item => item,
     getChildren: () => [],
+  }));
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    discovered = false;
+    if (panel) commands = commands.then(() => setupAction(discover)).catch(report);
+  }));
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+    if (event.affectsConfiguration('editor')) { editor = editorSettings(); send(true); }
   }));
   shutdown = async () => {
     preparation?.abort(); if (postTimer) clearTimeout(postTimer);

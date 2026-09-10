@@ -1,0 +1,114 @@
+// Real Chromium check for the setup/playback boundary. Run after npm run build.
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const { panelHtml } = require('../dist/panel.js');
+const root = path.resolve(__dirname, '..');
+const oid = n => require('node:crypto').createHash('sha1').update(String(n)).digest('hex');
+const setup = { loading: false, repositories: [{ id: 'repo-one', name: 'visageseek', path: '/projects/visageseek', branch: 'main' }, { id: 'repo-two', name: 'website', path: '/projects/website', branch: 'feature/search' }], selectedRepositoryId: 'repo-one', endOid: oid(20),
+  commits: ['Add searchable country dropdown', 'Handle missing session state', 'Add session persistence and recovery', 'Update app navigation', 'Configure the project workspace', 'Initialize repository'].map((subject, index) => ({ oid: oid(20 - index), subject })), nextCursor: oid(14), error: null };
+const playback = { type: 'state', sessionId: 'playing', status: 'running', configured: true, repository: 'visageseek', start: oid(18), end: oid(20),
+  timing: { mode: 'speed', charactersPerSecond: 24, pointerMultiplier: 1 }, totalMs: 21600000, elapsedMs: 4022000,
+  editor: { fontFamily: 'Menlo, monospace', fontSize: 14, fontWeight: 'normal', lineHeight: 22, tabSize: 2 },
+  recordNumber: 8, recordCount: 32, subject: 'Add session persistence and recovery', activePath: 'src/session.ts',
+  phase: { kind: 'click', target: 'code', editIndex: 0 }, phaseElapsedMs: 0, phaseDurationMs: 500,
+  files: [{ offset: 0, label: 'src/session.ts', change: 'M' }, { offset: 100, label: 'src/store.ts', change: 'A' }, { offset: 200, label: 'test/session.test.ts', change: 'A' }],
+  tabs: [{ offset: 100, label: 'src/store.ts' }, { offset: 0, label: 'src/session.ts' }], nextPage: null, previousPage: false,
+  frame: { firstLine: 18, lines: ["import { readFile, rename, writeFile } from 'node:fs/promises';", '',
+    'export async function saveCheckpoint(session, position) {', '  const checkpoint = {', '    version: 1,', '    sessionId: session.id,', '    position,', "    status: 'paused',", '  };', '',
+    '  await writeFile(session.temporaryPath, JSON.stringify(checkpoint));', '  await rename(session.temporaryPath, session.checkpointPath);', '}', '', '/* Safe, local session data.', '   Recovered after a restart. */', '// </script><img src=x onerror=alert(1)>'], caret: { row: 7, column: 21 } } };
+async function main() {
+  const artifacts = path.join(root, 'artifacts/preview'); await fs.mkdir(artifacts, { recursive: true });
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'git-replay-ui-'));
+  let chrome, socket;
+  const server = http.createServer(async (request, response) => {
+    try {
+      if (request.url === '/') {
+        const source = `http://127.0.0.1:${server.address().port}`;
+        let html = panelHtml({ script: '/panel.js', style: '/panel.css', cspSource: source, nonce: 'preview', sessionId: 'idle' });
+        const bootstrap = `window.previewBoot=Math.random();window.commands=[];window.fixtureSetup=${JSON.stringify(setup)};window.fixturePlayback=${JSON.stringify(playback)};window.pushState=(state)=>window.postMessage({type:'state',sessionId:'idle',configured:false,status:'ready',...state},'*');window.pushSetup=(setup,sessionId='idle')=>window.postMessage({type:'setup',sessionId,setup},'*');window.acquireVsCodeApi=()=>({getState:()=>JSON.parse(sessionStorage.getItem('draft')||'null'),setState:state=>sessionStorage.setItem('draft',JSON.stringify(state)),postMessage(message){window.commands.push(message);if(message.type==='ready'){pushState({});pushSetup(fixtureSetup);}}});`;
+        html = html.replace('<script nonce="preview" src=', `<script nonce="preview">${bootstrap.replaceAll('<', '\\u003c')}</script><script nonce="preview" src=`);
+        response.setHeader('Content-Type', 'text/html'); response.end(html);
+      } else if (['/panel.js', '/panel.css'].includes(request.url)) {
+        response.setHeader('Content-Type', request.url.endsWith('js') ? 'text/javascript' : 'text/css'); response.end(await fs.readFile(path.join(root, 'media', request.url.slice(1))));
+      } else { response.statusCode = 404; response.end(); }
+    } catch (error) { response.statusCode = 500; response.end(String(error)); }
+  });
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+    const executable = process.env.CHROME_PATH || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : 'chromium');
+    chrome = spawn(executable, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--disable-background-networking', '--disable-component-update', `--user-data-dir=${profile}`, '--remote-debugging-port=0'], { stdio: 'ignore' });
+    let launchError; chrome.on('error', error => { launchError = error; });
+    let port;
+    for (let i = 0; i < 100; i++) {
+      if (launchError) throw launchError;
+      try { port = Number((await fs.readFile(path.join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]); if (port) break; } catch {}
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.ok(port, 'Chromium must start');
+    const tabs = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+    socket = new WebSocket(tabs.find(tab => tab.type === 'page').webSocketDebuggerUrl);
+    await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
+    let id = 0; const pending = new Map();
+    socket.onmessage = event => { const message = JSON.parse(event.data); if (message.id) { const item = pending.get(message.id); pending.delete(message.id); message.error ? item.reject(message.error) : item.resolve(message.result); } };
+    const send = (method, params = {}) => new Promise((resolve, reject) => { const next = ++id; pending.set(next, { resolve, reject }); socket.send(JSON.stringify({ id: next, method, params })); });
+    const evaluate = async expression => { const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); assert.ok(!result.exceptionDetails, JSON.stringify(result.exceptionDetails)); return result.result.value; };
+    const settle = expression => evaluate(`(async()=>{${expression};await new Promise(r=>setTimeout(r,30));return true})()`);
+    const screenshot = async name => fs.writeFile(path.join(artifacts, name), Buffer.from((await send('Page.captureScreenshot')).data, 'base64'));
+    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 850, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/` });
+    for (let i = 0; i < 100; i++) { if (await evaluate("document.querySelector('#repository')?.value==='repo-one'")) break; await new Promise(resolve => setTimeout(resolve, 50)); }
+    assert.equal(await evaluate("document.querySelector('#repository').options.length"), 2);
+    assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), false);
+    await screenshot('setup-desktop.png');
+    await settle("document.querySelectorAll('.commit-option input')[2].click();document.querySelector('#commit-search').value='no match';document.querySelector('#commit-search').dispatchEvent(new Event('input'))");
+    assert.equal(await evaluate("document.querySelectorAll('.commit-option').length"), 0);
+    assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), false, 'filtered selection stays usable');
+    await settle(`document.querySelector('#older-commits').click();pushSetup({...fixtureSetup,commits:[{oid:'${oid(14)}',subject:'Earlier change'}],nextCursor:null})`);
+    assert.equal(await evaluate("commands.at(-1).cursor"), oid(14));
+    assert.ok((await evaluate("document.querySelector('#selected-commit').textContent")).includes('Add session persistence'));
+    await settle("document.querySelector('#setup-form').requestSubmit()");
+    const prepare = await evaluate('commands.at(-1)');
+    assert.deepEqual(prepare, { type: 'prepare', sessionId: 'idle', repositoryId: 'repo-one', startOid: oid(18), endOid: oid(20), timing: { mode: 'duration', durationMs: 21600000 } });
+    await settle("pushSetup({...fixtureSetup,error:'Duration is below minimum (10 seconds)'});document.querySelector('#hours').value='1';document.querySelector('#hours').dispatchEvent(new Event('input'))");
+    assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), false, 'preparation error allows a corrected retry');
+    const previousBoot = await evaluate('window.previewBoot');
+    await send('Page.reload');
+    for (let i = 0; i < 100; i++) { if (await evaluate(`window.previewBoot && window.previewBoot !== ${previousBoot} && document.querySelector('#repository')?.value==='repo-one'`)) break; await new Promise(resolve => setTimeout(resolve, 50)); }
+    assert.notEqual(await evaluate('window.previewBoot'), previousBoot);
+    assert.ok((await evaluate("document.querySelector('#selected-commit').textContent")).includes('Add session persistence'));
+    assert.equal(await evaluate("document.querySelector('#hours').value"), '1', 'draft survives webview context recreation');
+    await settle('pushState(fixturePlayback)');
+    const view = await evaluate(`({rows:document.querySelectorAll('.code-row').length,setupHidden:document.querySelector('#setup').hidden,syntax:document.querySelectorAll('.token-keyword').length,images:document.querySelectorAll('#code img').length,text:[...document.querySelectorAll('.line-content')].slice(0,17).map(node=>node.textContent),pointer:getComputedStyle(document.querySelector('#virtual-pointer')).pointerEvents,font:getComputedStyle(document.querySelector('#code')).fontSize,footerHeight:document.querySelector('.transport').getBoundingClientRect().height})`);
+    assert.equal(view.rows, 120); assert.equal(view.setupHidden, true); assert.ok(view.syntax > 0); assert.equal(view.images, 0); assert.deepEqual(view.text, playback.frame.lines); assert.equal(view.pointer, 'none'); assert.equal(view.font, '14px'); assert.ok(view.footerHeight < 40);
+    await screenshot('playback-desktop.png');
+    await settle("document.querySelector('#play').click();pushState({...fixturePlayback,status:'paused'});document.querySelector('#settings').click();document.querySelector('#typing').value='50';document.querySelector('#typing').dispatchEvent(new Event('change'))");
+    assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'speed', sessionId: 'playing', charactersPerSecond: 50, pointerMultiplier: 1 });
+    await settle("document.querySelector('#code-scroll').dispatchEvent(new KeyboardEvent('keydown',{key:'PageDown',bubbles:true}))");
+    assert.equal((await evaluate('commands.at(-1)')).firstLine, 58);
+    await settle("pushState({...fixturePlayback,editor:{...fixturePlayback.editor,fontSize:16,lineHeight:1.5}})");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('#code')).lineHeight"), '24px');
+    await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('#virtual-pointer')).display"), 'none');
+    await send('Emulation.setDeviceMetricsOverride', { width: 520, height: 900, deviceScaleFactor: 1, mobile: false });
+    await settle("document.querySelector('#settings').click()"); await screenshot('playback-narrow.png');
+    await settle("pushState({});pushSetup(fixtureSetup)");
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
+    await screenshot('setup-narrow.png');
+    await settle("document.querySelector('#repository').value='repo-two';document.querySelector('#repository').dispatchEvent(new Event('change'))");
+    assert.equal((await evaluate('commands.at(-1)')).repositoryId, 'repo-two');
+    await settle("pushSetup({loading:false,repositories:[],commits:[],selectedRepositoryId:null,endOid:null,nextCursor:null,error:'No Git repository found. Browse for a repository folder.'});document.querySelector('#browse-repository').click()");
+    assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), true);
+    assert.equal((await evaluate('commands.at(-1)')).type, 'repositoryBrowse');
+    await screenshot('setup-empty.png');
+    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
+    await fs.writeFile(path.join(root, 'artifacts/browser-smoke.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
+  } finally {
+    socket?.close(); if (chrome?.pid) { chrome.kill('SIGTERM'); await new Promise(resolve => { chrome.once('exit', resolve); setTimeout(resolve, 2000).unref(); }); }
+    await new Promise(resolve => server.close(resolve)); await fs.rm(profile, { recursive: true, force: true });
+  }
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -2,7 +2,7 @@
   "name": "trackskipper",
   "displayName": "Git Replay",
   "description": "Replay Git changes in an isolated, timed workspace inside VS Code.",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "trackskipper-local",
   "license": "MIT",
   "engines": {
@@ -82,7 +82,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.cjs",
     "benchmark": "npm run build && node --expose-gc scripts/benchmark.cjs",
-    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out trackskipper.vsix"
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out trackskipper.vsix",
+    "test:ui": "npm run build && node scripts/panel-smoke.cjs"
   },
   "devDependencies": {
     "@types/node": "22.15.30",

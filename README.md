@@ -8,15 +8,17 @@ Requires desktop VS Code **1.137 or later**, a trusted local Git workspace, and 
 
 1. In VS Code, run **Extensions: Install from VSIX…** and select `trackskipper.vsix`.
 2. Open a local Git repository, click the **Git Replay** icon in the left Activity Bar, then **Open Git Replay**. You can also run **Git Replay: Open** from the Command Palette.
-3. Choose **Configure replay**, a starting commit, then a duration (for example, `6` hours) or typing speed.
-4. Select **Start**. Use Pause, Resume, Stop, Restart or Clear session as needed.
+3. Your open repository is detected automatically. Use the repository dropdown or **Browse…** to choose another folder. Select a starting commit and a duration (for example, `6` hours) or typing speed.
+4. Select **Start replay**. Preparation flows directly into playback. Use Pause, Resume, Stop, Restart or Clear session as needed.
 
-The start commit is included. The ending commit is pinned to HEAD when you configure; later commits do not change a prepared session. Replay follows first-parent history, oldest to newest. Merges appear once against their first parent; renames appear as deletion/addition; empty commits appear as milestones.
+Commit search filters the loaded page of up to 100 commits; **Older** loads the next page, and **Latest** returns to the newest page. Your selection and timing survive switching editor tabs. **Refresh** redetects repositories and pins the latest HEAD. Pause playback and choose **＋** in its Explorer to configure another replay.
+
+The start commit is included. The ending commit is pinned to HEAD when the repository is selected or refreshed; later commits do not change a prepared session. Replay follows first-parent history, oldest to newest. Merges appear once against their first parent; renames appear as deletion/addition; empty commits appear as milestones.
 
 ## Controls and timing
 
 - **Duration:** fits the phase schedule and reading pauses to the requested active time. A duration below the minimum is rejected.
-- **Fixed speed:** 1–200 grapheme clusters per second. Pause to change typing or pointer speed; the estimated duration updates.
+- **Fixed speed:** 1–200 grapheme clusters per second. Open **Timing** and pause to change typing or pointer speed; the estimated duration updates.
 - **Browse:** pause and select a changed file or recent tab. Scroll with the wheel or arrow/page keys. **Follow playback** returns to the active file.
 - **Hide:** logical playback continues without rendering. Closing the panel pauses; reopening restores the current session.
 - **Recovery:** clean pauses retain position. After an interruption, the incomplete file may replay from its last durable boundary. Sleep or a heartbeat more than two seconds late pauses playback.
@@ -30,7 +32,7 @@ Only paths changed in the selected range are saved. This is a sparse reconstruct
 
 UTF-8 files up to 1 MiB with lines up to 8 KiB are animated. Binary, invalid UTF-8, larger/wider files and changes over 4,096 hunks use exact-byte snapshot events. Final verification checks expected plan entries and stored bytes. A quota error stops playback without advancing the durable checkpoint; increase **Git Replay: Storage Quota MiB** if needed (default 1 GiB, including plans and temporary writes).
 
-The preview renders at most 120 code rows and 64 KiB of text per frame. It uses a plain text view, five recent tabs, 100-entry pages and no runtime packages. The host throttles routine updates to 10 Hz; pointer movement is capped at 30 Hz. Git reads use at most two child processes.
+The preview renders at most 120 code rows and 64 KiB of text per frame. It uses VS Code theme colors and editor font settings, a small visible-window syntax highlighter, five recent tabs, 100-entry pages and no runtime packages. The preview is a webview; syntax colors support light/dark palettes and common languages, rather than full VS Code language grammars or custom token themes. The host throttles routine updates to 10 Hz; pointer movement is capped at 30 Hz. Git reads use at most two child processes.
 
 This is a reconstruction from commits, not a recording of the original editing session. It does not send system input or provide verified screen-tracker evasion.
 
@@ -40,6 +42,7 @@ Node.js 22+ is required for development. Run `npm ci`, then:
 
 ```sh
 npm test
+npm run test:ui  # Local Chromium check; set CHROME_PATH if needed
 npm run benchmark
 npm run package
 ```
@@ -61,6 +64,6 @@ For 10× the commits, preparation took 10.13× as long and retained heap grew by
 
 Extension-owned working memory is bounded by the active text, edit record, viewport and fixed pages; history and output grow on disk. Preparation reads every selected change and invokes Git's diff, whose cost depends on the contents. Saves stream each changed target blob. Changing speed rescans the remaining plan to estimate its duration without retaining it in memory.
 
-Validation: **26 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness supplied picker responses. Chromium checks verified local assets, 120 row nodes, literal HTML-like source, a pointer that cannot intercept input, narrow navigation and reduced motion.
+Validation: **38 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness selected a discovered repository and submitted the inline preparation command. Chromium checks verified inline setup and paging, form persistence, corrected retries, syntax rendering without interpreting source as HTML, 120 row nodes, editor typography, narrow layouts, and reduced motion.
 
 A manual session while using another app, Windows/Linux compatibility, real six-hour reliability, and measured UI/pointer frequencies and pause/stop p95 latency remain unverified. The frequency limits above are implementation caps, not measured real-time guarantees.

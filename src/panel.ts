@@ -1,17 +1,30 @@
 import { validateTiming } from './timing';
-export type PanelCommand = { type: string; sessionId: string; firstLine?: number; offset?: number; charactersPerSecond?: number; pointerMultiplier?: number };
+import { Timing } from './types';
+export type PanelCommand = { type: string; sessionId: string; firstLine?: number; offset?: number; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
 export function validCommand(value: unknown, sessionId: string): value is PanelCommand {
   if (!value || typeof value !== 'object') return false;
   const input = value as Record<string, unknown>;
   if (input.sessionId !== sessionId || typeof input.type !== 'string') return false;
   const keys = ['type', 'sessionId'];
-  if (input.type === 'speed') {
+  const oid = (value: unknown) => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
+  if (input.type === 'repository' || input.type === 'prepare') {
+    keys.push('repositoryId');
+    if (typeof input.repositoryId !== 'string' || !input.repositoryId.length || input.repositoryId.length > 1024) return false;
+    if (input.type === 'prepare') {
+      keys.push('startOid', 'endOid', 'timing');
+      if (!oid(input.startOid) || !oid(input.endOid)) return false;
+      try { validateTiming(input.timing); } catch { return false; }
+    }
+  } else if (input.type === 'commits') {
+    keys.push('cursor');
+    if (input.cursor !== null && !oid(input.cursor)) return false;
+  } else if (input.type === 'speed') {
     keys.push('charactersPerSecond', 'pointerMultiplier');
     try { validateTiming({ mode: 'speed', charactersPerSecond: input.charactersPerSecond, pointerMultiplier: input.pointerMultiplier }); } catch { return false; }
   } else if (input.type === 'viewport' || input.type === 'browse' || input.type === 'page') {
     const key = input.type === 'viewport' ? 'firstLine' : 'offset'; keys.push(key);
     if (!Number.isSafeInteger(input[key]) || (input[key] as number) < 0) return false;
-  } else if (!['ready', 'configure', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow'].includes(input.type)) return false;
+  } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow'].includes(input.type)) return false;
   return Object.keys(input).every(key => keys.includes(key));
 }
 
@@ -21,22 +34,51 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${attr(options.cspSource)}; script-src 'nonce-${attr(options.nonce)}';">
 <title>Git Replay</title><link rel="stylesheet" href="${attr(options.style)}"></head>
 <body data-session="${attr(options.sessionId)}">
-<header class="header"><div class="brand"><span class="commit-mark" aria-hidden="true">⎇</span><strong>Git Replay</strong><span class="edition">WORKSPACE</span></div><span class="isolation"><i></i> Isolated session</span><button id="configure" class="quiet">Configure replay</button></header>
 <div id="notice" class="notice" role="status" hidden></div>
-<div class="layout">
-<aside class="sidebar" aria-label="Replay settings">
-<section><h2>Repository</h2><div id="repository" class="field">No repository selected</div><div class="range-label"><h2>Commit range</h2><span>inclusive</span></div><label>From</label><div id="start-commit" class="field mono">Select a starting commit</div><label>Through</label><div id="end-commit" class="field mono">Latest commit</div><p class="hint">First-parent history · pinned at preparation</p></section>
-<section><h2>Playback</h2><div class="setting-row"><span id="timing-mode">Duration</span><span id="duration-label" class="mono">—</span></div><label for="typing">Typing speed <output id="typing-value">24 char/s</output></label><input id="typing" type="range" min="1" max="200" value="24" disabled><label for="pointer-speed">Pointer speed <output id="pointer-value">1×</output></label><input id="pointer-speed" type="range" min="0.25" max="4" step="0.25" value="1" disabled><p id="timing-hint" class="hint">Configure a duration or fixed typing speed.</p></section>
-<section class="changes"><div class="range-label"><h2>Changed files</h2><span id="file-count">0</span></div><div id="files" role="list" aria-label="Changed files"><p class="hint">Files appear when playback starts.</p></div><div class="pager"><button id="previous-files" class="quiet" disabled>Previous</button><button id="next-files" class="quiet" disabled>Next</button></div></section>
-<div class="sidebar-bottom"><span class="hint">Your workspace stays untouched.</span><button id="clear" class="quiet" disabled>Clear session</button></div>
-</aside>
-<main class="editor" aria-label="Replay code preview"><nav id="tabs" class="tabs" aria-label="Recent files"><span class="tab empty-tab">Preview</span></nav>
-<div class="editor-meta"><span id="file-path">Git Replay</span><button id="follow" class="quiet" disabled>Follow playback</button></div>
-<div id="empty" class="empty"><div class="empty-symbol" aria-hidden="true">↗</div><p class="eyebrow">FROM HISTORY TO MOTION</p><h1>Watch your code take shape.</h1><p>Choose a commit range and replay its changes<br>in a workspace of its own.</p><button id="configure-empty" class="primary">Configure replay <span aria-hidden="true">→</span></button><span class="hint">Local Git objects. Independent mouse. Original files untouched.</span></div>
+<main id="setup" class="setup">
+<div class="setup-content">
+<header class="setup-heading"><div><h1>Set up a replay</h1><p>Choose where to start. Replay through the latest commit.</p></div><button id="back" class="secondary" hidden>Back to playback</button></header>
+<section class="repository-section" aria-labelledby="repository-label">
+<label id="repository-label" for="repository">Repository</label>
+<div class="repository-controls"><select id="repository" disabled><option>Finding repositories…</option></select><button id="refresh" class="secondary" title="Refresh repositories and latest commit">Refresh</button><button id="browse-repository" class="secondary">Browse…</button></div>
+<p id="repository-path" class="hint path">Looking in your open workspace</p>
+<div id="setup-error" class="error-box" role="alert" hidden></div>
+</section>
+<form id="setup-form">
+<div class="setup-columns">
+<section class="commit-section" aria-labelledby="commits-heading">
+<div class="section-heading"><h2 id="commits-heading">Starting commit</h2><span id="commit-count" class="hint"></span></div>
+<input id="commit-search" type="search" placeholder="Search loaded commits" aria-label="Search loaded commits" autocomplete="off">
+<div id="commits" class="commit-list" role="radiogroup" aria-label="Starting commit"><p class="list-empty">Loading commits…</p></div>
+<div class="pager"><span class="hint">Newest first · first-parent history</span><div><button id="latest-commits" type="button" class="text-button" disabled>Latest</button><button id="older-commits" type="button" class="text-button" disabled>Older ↓</button></div></div>
+</section>
+<section class="timing-section" aria-labelledby="timing-heading">
+<h2 id="timing-heading">Playback timing</h2>
+<div class="segmented" role="group" aria-label="Timing mode"><button id="mode-duration" type="button" aria-pressed="true">Set duration</button><button id="mode-speed" type="button" aria-pressed="false">Set speed</button></div>
+<div id="duration-settings"><label for="hours">Finish in</label><div class="duration-input"><input id="hours" type="number" min="0.001" max="720" step="any" value="6" required><span>hours</span></div><div class="presets"><button type="button" data-hours="0.25">15 min</button><button type="button" data-hours="1">1 hour</button><button type="button" data-hours="6" aria-pressed="true">6 hours</button></div><p class="hint">Typing and pauses are paced to fit. Pausing playback extends the finish time.</p></div>
+<div id="speed-settings" hidden><label for="setup-typing">Typing speed <output id="setup-typing-value">24 char/s</output></label><input id="setup-typing" type="range" min="1" max="200" value="24"><label for="setup-pointer">Pointer speed <output id="setup-pointer-value">1×</output></label><input id="setup-pointer" type="range" min="0.25" max="4" step="0.25" value="1"><p class="hint">Duration follows the amount of code. You can adjust these speeds while paused.</p></div>
+<div class="range-summary"><span class="hint">Selected range · inclusive</span><strong id="selected-commit">Choose a starting commit</strong><span class="hint">↓ through latest <code id="end-commit">—</code></span></div>
+<p class="isolation-note">Runs in its own scratch workspace. Your files, keyboard, and mouse stay yours.</p>
+</section>
+</div>
+<footer class="setup-actions"><span id="selection-hint" class="hint">Choose a repository and a starting commit.</span><button id="cancel-prepare" type="button" class="secondary" hidden>Cancel</button><button id="start-replay" type="submit" class="primary" disabled>Start replay</button></footer>
+</form>
+</div>
+</main>
+<div id="playback" class="playback" hidden>
+<div class="workbench">
+<aside class="explorer" aria-label="Replayed files"><div class="explorer-heading"><span>EXPLORER</span><button id="new-replay" title="Set up another replay" aria-label="Set up another replay">＋</button></div><div class="folder-heading"><span aria-hidden="true">⌄</span><strong id="workspace-name">REPLAY</strong><span id="file-count"></span></div><div id="files" aria-label="Files changed in this commit"></div><div class="file-pager"><button id="previous-files" class="text-button" disabled>Previous</button><button id="next-files" class="text-button" disabled>Next</button></div><button id="clear" class="text-button clear-session" disabled>Clear session</button></aside>
+<main class="editor" aria-label="Replay code preview">
+<nav id="tabs" class="tabs" aria-label="Recent files"><span class="tab empty-tab">Preview</span></nav>
+<div class="breadcrumbs"><span id="file-path">Git Replay</span><button id="follow" class="text-button" disabled>Follow playback</button></div>
+<div id="empty" class="editor-empty"><p id="empty-message">Opening the first file…</p></div>
 <div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Read-only replay code" hidden><div id="code" class="code"></div></div>
-<div class="editor-foot"><span id="commit-subject">Ready when you are</span><span id="phase">No active replay</span></div>
-</main></div>
-<footer class="transport"><div class="transport-buttons"><button id="restart" class="quiet" title="Restart replay" aria-label="Restart replay" disabled>↶</button><button id="play" class="primary" disabled>▶ Start</button><button id="stop" class="quiet" disabled>■ Stop</button></div><div class="timeline"><span id="elapsed" class="mono">00:00:00</span><progress id="progress" max="1" value="0" aria-label="Replay progress"></progress><span id="total" class="mono">00:00:00</span></div><span id="status" class="status">Ready</span></footer>
+<div class="editor-foot"><span id="commit-subject"></span><span id="phase"></span></div>
+</main>
+</div>
+<section id="playback-settings" class="playback-settings" aria-label="Playback settings" hidden><div><strong id="timing-mode">Playback timing</strong><p id="timing-hint" class="hint"></p></div><div><label for="typing">Typing speed <output id="typing-value"></output></label><input id="typing" type="range" min="1" max="200" value="24" disabled></div><div><label for="pointer-speed">Pointer speed <output id="pointer-value"></output></label><input id="pointer-speed" type="range" min="0.25" max="4" step="0.25" value="1" disabled></div></section>
+<footer class="transport"><span class="replay-label">Git Replay</span><button id="restart" title="Restart replay" aria-label="Restart replay" disabled>↶</button><button id="play" disabled>▶ Start</button><button id="stop" disabled>■ Stop</button><span id="status" class="status">Ready</span><div class="timeline"><span id="elapsed">00:00:00</span><progress id="progress" max="1" value="0" aria-label="Replay progress"></progress><span id="total">00:00:00</span></div><button id="settings" aria-expanded="false" aria-controls="playback-settings">Timing</button></footer>
+</div>
 <div id="virtual-pointer" class="virtual-pointer" aria-hidden="true" hidden><svg width="22" height="27" viewBox="0 0 22 27"><path d="M2 2v20l5-5 4 8 4-2-4-8 8-1Z" fill="white" stroke="#181a1f" stroke-width="1.5" stroke-linejoin="round"/></svg><span class="click-ring"></span></div>
 <script nonce="${attr(options.nonce)}" src="${attr(options.script)}"></script></body></html>`;
 }
