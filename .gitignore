@@ -2,6 +2,10 @@ node_modules/
 dist/
 *.vsix
 .superpowers/
-.superdesign/tmp/
+.superdesign/
 .worktrees/
 artifacts/
+*.md
+!README.md
+session.json
+graphify-out
