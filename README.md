@@ -7,7 +7,7 @@ Replay an inclusive range of Git commits in an isolated VS Code panel. Code appe
 Requires desktop VS Code **1.137 or later**, a trusted local Git workspace, and Git 2.45+. Tested on macOS Apple Silicon; Windows/Linux and remote workspaces are not validated. Remote and virtual workspaces are disabled.
 
 1. In VS Code, run **Extensions: Install from VSIX…** and select `trackskipper.vsix`.
-2. Open a local Git repository and run **Git Replay: Open** from the Command Palette.
+2. Open a local Git repository, click the **Git Replay** icon in the left Activity Bar, then **Open Git Replay**. You can also run **Git Replay: Open** from the Command Palette.
 3. Choose **Configure replay**, a starting commit, then a duration (for example, `6` hours) or typing speed.
 4. Select **Start**. Use Pause, Resume, Stop, Restart or Clear session as needed.
 

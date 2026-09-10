@@ -2,7 +2,7 @@
   "name": "trackskipper",
   "displayName": "Git Replay",
   "description": "Replay Git changes in an isolated, timed workspace inside VS Code.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "trackskipper-local",
   "license": "MIT",
   "engines": {
@@ -27,7 +27,8 @@
     "commands": [
       {
         "command": "gitReplay.open",
-        "title": "Git Replay: Open"
+        "title": "Git Replay: Open",
+        "icon": "$(play)"
       }
     ],
     "configuration": {
@@ -42,6 +43,39 @@
           "description": "Maximum storage for the replay session, in MiB."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gitReplay",
+          "title": "Git Replay",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "views": {
+      "gitReplay": [
+        {
+          "id": "gitReplay.launcher",
+          "name": "Git Replay",
+          "icon": "media/activity-bar.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "gitReplay.launcher",
+        "contents": "Replay committed changes in an isolated workspace.\n[Open Git Replay](command:gitReplay.open)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gitReplay.open",
+          "when": "view == gitReplay.launcher",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {

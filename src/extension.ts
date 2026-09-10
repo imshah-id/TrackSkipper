@@ -242,6 +242,10 @@ export function activate(context: vscode.ExtensionContext): void {
     opening ??= openPanel().catch(report).finally(() => { opening = undefined; });
     return opening;
   }));
+  context.subscriptions.push(vscode.window.registerTreeDataProvider<vscode.TreeItem>('gitReplay.launcher', {
+    getTreeItem: item => item,
+    getChildren: () => [],
+  }));
   shutdown = async () => {
     preparation?.abort(); if (postTimer) clearTimeout(postTimer);
     await replay?.pause(); await replay?.dispose(); await disposeGit();

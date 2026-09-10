@@ -30,6 +30,7 @@ function host() {
     ViewColumn: { Active: 1 }, ProgressLocation: { Notification: 1 },
     commands: { registerCommand: (_, callback) => { open = callback; return { dispose() {} }; } },
     window: {
+      registerTreeDataProvider: () => ({ dispose() {} }),
       showErrorMessage: async () => {}, showWarningMessage: async () => 'Replace session',
       showInputBox: async () => '6', showQuickPick: async items => pickGate ? await pickGate(items) : items[0],
       withProgress: async (_, callback) => callback({ report() {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
