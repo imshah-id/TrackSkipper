@@ -1,0 +1,40 @@
+{
+  "name": "trackskipper",
+  "displayName": "Git Replay",
+  "description": "Replay Git changes in an isolated, timed workspace inside VS Code.",
+  "version": "0.1.0",
+  "publisher": "trackskipper-local",
+  "license": "MIT",
+  "engines": { "vscode": "^1.100.0" },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false },
+    "virtualWorkspaces": { "supported": false }
+  },
+  "contributes": {
+    "commands": [{ "command": "gitReplay.open", "title": "Git Replay: Open" }],
+    "configuration": {
+      "title": "Git Replay",
+      "properties": {
+        "gitReplay.storageQuotaMiB": {
+          "type": "integer", "default": 1024, "minimum": 16, "maximum": 20480,
+          "scope": "application", "description": "Maximum storage for the replay session, in MiB."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "benchmark": "npm run build && node --expose-gc scripts/benchmark.cjs",
+    "package": "npm run build && vsce package --no-dependencies --allow-missing-repository --out trackskipper.vsix"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/vscode": "1.100.0",
+    "@vscode/vsce": "3.6.0",
+    "typescript": "5.8.3"
+  }
+}
