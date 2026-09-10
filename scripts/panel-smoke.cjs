@@ -29,9 +29,12 @@ async function main() {
       if (request.url === '/') {
         const source = `http://127.0.0.1:${server.address().port}`;
         let html = panelHtml({ script: '/panel.js', style: '/panel.css', cspSource: source, nonce: 'preview', sessionId: 'idle' });
+        html = html.replace('<link rel="stylesheet"', '<link rel="stylesheet" href="/host.css"><link rel="stylesheet"');
         const bootstrap = `window.previewBoot=Math.random();window.commands=[];window.fixtureSetup=${JSON.stringify(setup)};window.fixturePlayback=${JSON.stringify(playback)};window.pushState=(state)=>window.postMessage({type:'state',sessionId:'idle',configured:false,status:'ready',...state},'*');window.pushSetup=(setup,sessionId='idle')=>window.postMessage({type:'setup',sessionId,setup},'*');window.acquireVsCodeApi=()=>({getState:()=>JSON.parse(sessionStorage.getItem('draft')||'null'),setState:state=>sessionStorage.setItem('draft',JSON.stringify(state)),postMessage(message){window.commands.push(message);if(message.type==='ready'){pushState({});pushSetup(fixtureSetup);}}});`;
         html = html.replace('<script nonce="preview" src=', `<script nonce="preview">${bootstrap.replaceAll('<', '\\u003c')}</script><script nonce="preview" src=`);
         response.setHeader('Content-Type', 'text/html'); response.end(html);
+      } else if (request.url === '/host.css') {
+        response.setHeader('Content-Type', 'text/css'); response.end('body { padding: 0 20px; }');
       } else if (['/panel.js', '/panel.css'].includes(request.url)) {
         response.setHeader('Content-Type', request.url.endsWith('js') ? 'text/javascript' : 'text/css'); response.end(await fs.readFile(path.join(root, 'media', request.url.slice(1))));
       } else { response.statusCode = 404; response.end(); }
@@ -84,6 +87,8 @@ async function main() {
     assert.ok((await evaluate("document.querySelector('#selected-commit').textContent")).includes('Add session persistence'));
     assert.equal(await evaluate("document.querySelector('#hours').value"), '1', 'draft survives webview context recreation');
     await settle('pushState(fixturePlayback)');
+    assert.equal(await evaluate("document.querySelector('.workbench').getBoundingClientRect().left"), 0, 'webview resets the host padding');
+    assert.equal(await evaluate("document.querySelector('.workbench').getBoundingClientRect().right"), 1100, 'workbench reaches the right edge');
     const view = await evaluate(`({rows:document.querySelectorAll('.code-row').length,setupHidden:document.querySelector('#setup').hidden,syntax:document.querySelectorAll('.token-keyword').length,images:document.querySelectorAll('#code img').length,text:[...document.querySelectorAll('.line-content')].slice(0,17).map(node=>node.textContent),pointer:getComputedStyle(document.querySelector('#virtual-pointer')).pointerEvents,font:getComputedStyle(document.querySelector('#code')).fontSize,footerHeight:document.querySelector('.transport').getBoundingClientRect().height})`);
     assert.equal(view.rows, 120); assert.equal(view.setupHidden, true); assert.ok(view.syntax > 0); assert.equal(view.images, 0); assert.deepEqual(view.text, playback.frame.lines); assert.equal(view.pointer, 'none'); assert.equal(view.font, '14px'); assert.ok(view.footerHeight < 40);
     await screenshot('playback-desktop.png');
@@ -93,7 +98,7 @@ async function main() {
     assert.ok(await evaluate("document.querySelectorAll('.token-declaration').length > 0"), 'Dart declarations are highlighted');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.line-content')].slice(0,5).map(node=>node.textContent)"), dartLines);
     assert.equal(await evaluate("document.querySelector('.file-name').textContent"), 'dashboard_shell.dart', 'filenames come before directory paths');
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('.folder-name')].map(node=>node.textContent)"), ['lib', 'features', 'dashboard']);
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.folder-name')].map(node=>node.textContent)"), ['lib / features / dashboard']);
     await screenshot('playback-dart.png');
     await settle("document.querySelector('.folder summary').click()");
     assert.equal(await evaluate("document.querySelector('.folder').open"), false, 'folders collapse');
@@ -113,11 +118,21 @@ async function main() {
     await settle("document.querySelector('#settings').click();document.querySelector('#toggle-controls').click()");
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('#playback-settings')).display"), 'none');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.tabs')).display"), 'none', 'hidden controls remove the duplicate tab strip');
     assert.equal(await evaluate("document.querySelector('#toggle-controls').textContent"), 'Show controls');
     await settle('pushState(fixturePlayback)');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'updates keep controls hidden');
     assert.equal(await evaluate("JSON.parse(sessionStorage.getItem('draft')).controlsHidden"), true, 'visibility preference is saved');
     await screenshot('playback-hidden-controls.png');
+    const androidFiles = ['kotlin/com/visageseek/app/MainActivity.kt', 'res/drawable/launch_background.xml', 'res/drawable-v21/launch_background.xml', 'res/mipmap-hdpi/ic_launcher.png', 'res/mipmap-mdpi/ic_launcher.png', 'res/mipmap-xhdpi/ic_launcher.png', 'res/mipmap-xxhdpi/ic_launcher.png', 'res/mipmap-xxxhdpi/ic_launcher.png', 'res/values/styles.xml', 'res/values-night/styles.xml', 'AndroidManifest.xml'].map((name, index) => ({ offset: index * 100, label: `android/app/src/main/${name}`, change: 'A' }));
+    const androidFrame = { firstLine: 3, lines: ['<item android:drawable="?android:colorBackground" />', '', '<!-- You can insert your own image assets here -->', '<!-- <item>', '    <bitmap', '        android:gravity="center"', '        android:src="@mipmap/ic_launcher" />'], caret: { row: 6, column: 40 } };
+    await settle(`pushState({...fixturePlayback,files:${JSON.stringify(androidFiles)},activePath:'android/app/src/main/res/drawable-v21/launch_background.xml',frame:${JSON.stringify(androidFrame)}})`);
+    assert.equal(await evaluate("document.querySelector('.folder-name').textContent"), 'android / app / src / main', 'single-folder chains compact until a real branch');
+    assert.equal(await evaluate("document.querySelector('.folder summary').getBoundingClientRect().height"), 22, 'folder rows use compact spacing');
+    assert.equal(await evaluate("document.querySelector('.file-button').getBoundingClientRect().height"), 22, 'file rows align with folder rows');
+    assert.equal(await evaluate("document.querySelector('.explorer-heading').getBoundingClientRect().height === document.querySelector('.breadcrumbs').getBoundingClientRect().height"), true, 'headers share a baseline');
+    await screenshot('playback-android-clean.png');
+    await settle('pushState(fixturePlayback)');
     assert.ok(await evaluate("document.querySelector('#playback [data-fullscreen]').getBoundingClientRect().width > 0"), 'fullscreen stays accessible with controls hidden');
     await settle("document.querySelector('#playback [data-fullscreen]').click()");
     assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'fullscreen', sessionId: 'playing' });

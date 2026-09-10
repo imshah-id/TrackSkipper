@@ -164,6 +164,7 @@ test('scrolling a browsed file keeps that file selected', async () => {
     await app.open(); await app.send('resume'); await app.send('pause');
     await app.send('browse', { offset: 100 });
     assert.equal(app.panels.at(-1).messages.at(-1).activePath, 'b.ts');
+    assert.equal(app.panels.at(-1).title, 'b.ts', 'native tab follows the displayed file');
     await app.send('viewport', { firstLine: 6 });
     const state = app.panels.at(-1).messages.at(-1);
     assert.equal(state.activePath, 'b.ts');

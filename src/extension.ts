@@ -49,6 +49,8 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!force && wait > 0) { if (!postTimer) postTimer = setTimeout(() => { postTimer = undefined; send(); }, wait); return; }
     if (postTimer) clearTimeout(postTimer); postTimer = undefined; lastPost = performance.now();
     const state = replay?.getState();
+    const title = activePath ? path.posix.basename(activePath) : 'Replay';
+    if (panel.title !== title) panel.title = title;
     const status = busy ? 'preparing' : error ? 'error' : state?.status ?? (recovery?.status === 'complete' ? 'complete' : recovery ? 'paused' : 'ready');
     void panel.webview.postMessage({ type: 'state', sessionId: sessionId(), status, notice: error || notice, isError: !!error, canCancelPreparation: !!preparation,
       configured: !!plan, repository: plan ? path.basename(plan.repo) : '', start: plan?.startOid, end: plan?.endOid,
@@ -308,7 +310,7 @@ export function activate(context: vscode.ExtensionContext): void {
         plan = candidate; recovery = await store.readCheckpoint(); notice = 'Saved session loaded. Resume or restart when ready.';
       } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
     }
-    panel = vscode.window.createWebviewPanel('gitReplay', 'Git Replay', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
+    panel = vscode.window.createWebviewPanel('gitReplay', 'Replay', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
     replay?.setVisible(panel.visible);
     const webview = panel.webview;
     webview.html = panelHtml({ script: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js')).toString(), style: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css')).toString(), cspSource: webview.cspSource, nonce: randomBytes(16).toString('hex'), sessionId: sessionId() });

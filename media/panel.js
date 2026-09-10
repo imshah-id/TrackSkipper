@@ -31,7 +31,9 @@
 
   function renderControls() {
     $('playback').classList.toggle('controls-hidden', controlsHidden);
-    $('toggle-controls').textContent = controlsHidden ? 'Show controls' : 'Hide controls';
+    $('controls-label').textContent = controlsHidden ? 'Show controls' : 'Hide controls';
+    $('toggle-controls').setAttribute('aria-label', $('controls-label').textContent);
+    $('toggle-controls').title = `${$('controls-label').textContent} (Escape to restore)`;
     $('toggle-controls').setAttribute('aria-expanded', String(!controlsHidden));
   }
 
@@ -52,12 +54,14 @@
       branch.files.push(file);
     }
     const append = (branch, parent, depth) => {
-      for (const folder of [...branch.folders.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+      for (let folder of [...branch.folders.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+        let folderLabel = folder.name;
+        while (!folder.files.length && folder.folders.size === 1) { folder = folder.folders.values().next().value; folderLabel += ` / ${folder.name}`; }
         const details = document.createElement('details'), summary = document.createElement('summary'), name = document.createElement('span');
         details.className = 'folder'; details.dataset.path = folder.path;
         details.open = !collapsed.has(folder.path) || reveal && state.activePath?.startsWith(`${folder.path}/`);
         summary.style.setProperty('--depth', depth); summary.title = folder.path;
-        name.className = 'folder-name'; name.textContent = folder.name;
+        name.className = 'folder-name'; name.textContent = folderLabel;
         summary.append(glyph('chevron'), glyph('folder'), name); details.append(summary);
         append(folder, details, depth + 1); parent.append(details);
       }
@@ -73,6 +77,7 @@
       }
     };
     const fragment = document.createDocumentFragment(); append(root, fragment, 0); $('files').replaceChildren(fragment);
+    if (reveal) $('files').querySelector('.file-button.selected')?.scrollIntoView({ block: 'nearest' });
     if (focusedPath) [...$('files').querySelectorAll('.folder')].find(node => node.dataset.path === focusedPath)?.querySelector('summary').focus({ preventScroll: true });
   }
 
@@ -191,8 +196,8 @@
     const key = `${state.recordNumber}:${state.phase.kind}:${state.phase.editIndex}:${state.phase.target}`;
     if (key === phaseKey) return; phaseKey = key; stopPointer();
     const marker = $('virtual-pointer'); marker.hidden = false;
-    let target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('tabs') : document.querySelector('.caret') || $('code');
-    if (target.closest('.folder:not([open])')) target = $('tabs');
+    let target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('file-path') : document.querySelector('.caret') || $('code');
+    if (target.closest('.folder:not([open])')) target = $('file-path');
     const rect = target.getBoundingClientRect(), targetX = Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2))), targetY = Math.max(5, Math.min(innerHeight - 32, rect.top + 8));
     const startX = pointerX, startY = pointerY, moving = state.phase.kind === 'move' || state.phase.kind === 'scroll';
     const duration = moving ? Math.max(1, state.phaseDurationMs - state.phaseElapsedMs) : 0, began = performance.now(); let previous = -Infinity;
