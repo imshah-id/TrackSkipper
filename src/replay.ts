@@ -1,7 +1,7 @@
 export { createTextView, frameAt, lineStarts, lineAt } from './view';
 export type { TextView } from './view';
 import { Checkpoint, FileRecord, Frame, LIMITS, Phase, Plan, Position, RecordEntry, Timing } from './types';
-import { createTextView, frameAt, lineAt, TextView } from './view';
+import { createTextView, frameAt, lineAt, lineStarts, TextView } from './view';
 import { readRecords, textBlob } from './plan';
 import { extraWait, phaseDuration, validateTiming } from './timing';
 
@@ -41,7 +41,8 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   let timer: unknown, pending = Promise.resolve();
   let visible = true, lastTime = 0, lastWall = 0, delay = 0, lastFrameTime = -Infinity;
   let oldBoundary = 0, newBoundary = 0, viewport: number | undefined;
-  let segmentIterator: IterableIterator<Intl.SegmentData> | undefined, segmentBase = 0, consumed = 0;
+  let phaseView: TextView | undefined, deletionView: TextView | undefined, deletionEdit = -1;
+  let stepOffsets = new Uint32Array(0), stepBeats = new Float64Array(0), consumed = 0, totalBeats = 0;
   let totalMs = timing.mode === 'duration' ? timing.durationMs : plan.totals.preferredMs;
   const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
   const setStatus = (value: ReplayStatus) => { status = value; events.status?.(value); };
@@ -73,20 +74,15 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     const item = current();
     if (!view || !item || record?.kind !== 'text') return;
     if (item.phase.kind === 'save') { oldBoundary = view.oldText.length; newBoundary = view.newText.length; return; }
-    if (!segmentIterator) return;
-    const wanted = Math.min(item.phase.units, Math.floor(item.phase.units * (item.duration ? position.phaseElapsedMs / item.duration : 1)));
-    while (consumed < wanted) {
-      const next = segmentIterator.next();
-      if (next.done) throw new Error('Text phase exceeds its source range');
-      const boundary = segmentBase + next.value.index + next.value.segment.length;
-      if (item.phase.kind === 'delete') oldBoundary = boundary;
-      else newBoundary = boundary;
+    const wanted = totalBeats * (item.duration ? position.phaseElapsedMs / item.duration : 1);
+    while (consumed < stepOffsets.length && stepBeats[consumed] <= wanted + 1e-7) {
+      newBoundary = stepOffsets[item.phase.kind === 'delete' ? stepOffsets.length - 1 - consumed : consumed];
       consumed++;
     }
   }
 
   function initializePhase(): void {
-    segmentIterator = undefined; consumed = 0;
+    stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0); consumed = 0; totalBeats = 0; phaseView = view;
     const phase = current()?.phase;
     if (!phase || !view || record?.kind !== 'text') return;
     if (phase.editIndex !== null) {
@@ -94,10 +90,27 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
       if (!edit || edit.oldStart < 0 || edit.newStart < 0 || edit.oldEnd > view.oldText.length || edit.newEnd > view.newText.length) throw new Error('Invalid text edit range');
       oldBoundary = phase.kind === 'type' ? edit.oldEnd : edit.oldStart;
       newBoundary = edit.newStart;
+      if (phase.kind !== 'type' && edit.deleteUnits) {
+        if (deletionEdit !== phase.editIndex) {
+          const prefix = view.newText.slice(0, edit.newStart) + view.oldText.slice(edit.oldStart, edit.oldEnd);
+          deletionView = { ...view, newText: prefix, newLineStarts: lineStarts(prefix) }; deletionEdit = phase.editIndex;
+        }
+        phaseView = deletionView;
+        oldBoundary = edit.oldEnd; newBoundary = edit.newStart + edit.oldEnd - edit.oldStart;
+      }
       if (phase.kind === 'delete' || phase.kind === 'type') {
-        segmentBase = phase.kind === 'delete' ? edit.oldStart : edit.newStart;
         const text = phase.kind === 'delete' ? view.oldText.slice(edit.oldStart, edit.oldEnd) : view.newText.slice(edit.newStart, edit.newEnd);
-        segmentIterator = segmenter.segment(text)[Symbol.iterator]();
+        if (phase.units > text.length) throw new Error('Text phase exceeds its source range');
+        stepOffsets = new Uint32Array(phase.units); stepBeats = new Float64Array(phase.units);
+        let index = 0, previous = '';
+        for (const part of segmenter.segment(text)) {
+          stepOffsets[index] = edit.newStart + part.index + (phase.kind === 'type' ? part.segment.length : 0);
+          // Deterministic beats preserve the same frame after resume and keep the phase's total duration.
+          totalBeats += phase.kind === 'delete' ? (index < 2 ? 1.8 : 0.65)
+            : /\n/.test(previous) ? 4 : /[;,{}()]/.test(previous) ? 2 : 0.7 + (index * 7 % 5) * 0.15;
+          stepBeats[index++] = totalBeats; previous = part.segment;
+        }
+        if (index !== phase.units) throw new Error('Text phase does not match its source range');
       }
     }
     updateBoundaries();
@@ -108,9 +121,9 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     if (!visible || !current() || (!force && clock.now() - lastFrameTime < 1000 / LIMITS.hostHz)) return;
     const item = current()!;
     let frame: Frame;
-    if (view) {
-      const firstLine = viewport ?? Math.max(0, lineAt(view.newLineStarts, newBoundary) - 6);
-      frame = frameAt(view, oldBoundary, newBoundary, firstLine, LIMITS.frameRows);
+    if (phaseView) {
+      const firstLine = viewport ?? Math.max(0, lineAt(phaseView.newLineStarts, newBoundary) - 6);
+      frame = frameAt(phaseView, oldBoundary, newBoundary, firstLine, LIMITS.frameRows);
     } else frame = { firstLine: 0, lines: [record?.kind === 'milestone' ? 'No file changes in this commit.' : (record as FileRecord | undefined)?.reason ?? 'Saving exact file bytes.'], caret: null };
     lastFrameTime = clock.now(); events.frame(frame, item.phase, position.phaseElapsedMs, item.duration);
   }
@@ -122,10 +135,11 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
         const firstLine = viewport ?? Math.max(0, lineAt(view.newLineStarts, view.newText.length) - 6);
         events.frame(frameAt(view, view.oldText.length, view.newText.length, firstLine, LIMITS.frameRows), record.phases.at(-1)!, 0, 0);
       }
-      record = undefined; view = undefined; schedule = []; return false;
+      record = undefined; view = phaseView = deletionView = undefined; schedule = [];
+      stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0); return false;
     }
     record = next.value.record; nextOffset = next.value.nextOffset; position.recordOffset = next.value.offset;
-    schedule = makeSchedule(record); viewport = undefined; view = undefined; oldBoundary = 0; newBoundary = 0;
+    schedule = makeSchedule(record); viewport = undefined; view = undefined; deletionView = undefined; deletionEdit = -1; oldBoundary = 0; newBoundary = 0;
     if (record.kind === 'text') view = createTextView(await textBlob(plan.repo, record.change.oldOid, cancellation.signal), await textBlob(plan.repo, record.change.newOid, cancellation.signal));
     if (!Number.isSafeInteger(position.phaseIndex) || position.phaseIndex >= schedule.length || position.phaseIndex < 0
       || position.phaseElapsedMs < 0 || !Number.isFinite(position.phaseElapsedMs)
@@ -227,7 +241,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     getState() { return { status, position: { ...position }, record, timing, totalMs, phase: current()?.phase, phaseDurationMs: current()?.duration ?? 0 }; },
     async dispose(): Promise<void> {
       cancelTimer(); cancellation.abort(); await pending.catch(() => undefined); await iterator?.return(undefined);
-      view = undefined; record = undefined; schedule = []; segmentIterator = undefined;
+      view = phaseView = deletionView = undefined; record = undefined; schedule = []; stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0);
     },
   };
 }

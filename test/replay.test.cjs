@@ -4,6 +4,50 @@ const { phaseDuration, extraWait, validateTiming } = require('../dist/timing.js'
 const { createTextView, frameAt } = require('../dist/replay.js');
 const replayModule = require('../dist/replay.js');
 
+test('backspace removes whole graphemes from the end, resumes exactly, and typing has pauses', async () => {
+  const oldText = 'head\r\nab👩‍💻e\u0301\r\ntail', newText = 'head\r\ncall();\nnext\r\ntail';
+  const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  const edit = { oldStart: 6, oldEnd: oldText.indexOf('tail'), newStart: 6, newEnd: newText.indexOf('tail') };
+  const removed = [...segmenter.segment(oldText.slice(edit.oldStart, edit.oldEnd))].map(item => item.segment);
+  edit.deleteUnits = removed.length; edit.insertUnits = [...segmenter.segment(newText.slice(edit.newStart, edit.newEnd))].length;
+  const phases = ['move', 'click', 'delete', 'type', 'save'].map(kind => ({ kind, target: 'code', editIndex: kind === 'save' ? null : 0, units: kind === 'delete' ? edit.deleteUnits : kind === 'type' ? edit.insertUnits : 0, preferredMs: ['move', 'click'].includes(kind) ? 300 : 0, minimumMs: 0 }));
+  const record = { kind: 'text', ordinal: 0, edits: [edit], phases, weight: 1, change: { oldOid: 'old', newOid: 'new' } };
+  const exports = {};
+  require('node:vm').runInNewContext(require('node:fs').readFileSync(require.resolve('../dist/replay.js'), 'utf8'), {
+    exports, Buffer, performance, setTimeout, clearTimeout, AbortController,
+    require: name => name === './plan' ? { textBlob: async (_, oid) => oid === 'old' ? oldText : newText,
+      readRecords: async function* (_, offset) { if (!offset) yield { record, offset: 0, nextOffset: 1 }; } } : require(require('node:path').resolve(__dirname, '../dist', name)),
+  });
+  let now = 0, timer, latest, checkpoint, saved = 0;
+  const clock = { now: () => now, wallNow: () => now, schedule: (callback, delay) => { timer = { callback, delay }; return 1; }, cancel: () => { timer = undefined; } };
+  const typingTimes = [], deletionFrames = [];
+  const events = { frame: (frame, phase) => {
+    latest = structuredClone(frame);
+    if (phase.kind === 'delete' && JSON.stringify(latest) !== JSON.stringify(deletionFrames.at(-1))) deletionFrames.push(latest);
+    if (phase.kind === 'type' && latest.lines.join('\n') !== typingTimes.at(-1)?.text) typingTimes.push({ at: now, text: latest.lines.join('\n') });
+  }, progress() {}, save: async () => saved++, checkpoint: async value => { checkpoint = structuredClone(value); }, error: message => assert.fail(message) };
+  const plan = { version: 1, id: 'typing', repo: '/fixture', timing: { mode: 'speed', charactersPerSecond: 2, pointerMultiplier: 1 }, totals: { minimumMs: 0, preferredMs: 20000, weight: 1, records: 1 } };
+  let replay = exports.createReplay(plan, clock, events);
+  const step = async () => { const pending = timer; timer = undefined; now += pending.delay; await pending.callback(); };
+  try {
+    await replay.start();
+    assert.deepEqual(latest.caret, { row: 2, column: 0 }, 'click starts at the end of the text to remove');
+    while (deletionFrames.length < 3) await step();
+    await replay.pause(); const pausedFrame = structuredClone(latest);
+    await replay.dispose(); replay = exports.createReplay(plan, clock, events); await replay.start(checkpoint);
+    assert.deepEqual(latest, pausedFrame, 'recovery restores the same deletion frame');
+    await replay.pause(); await replay.setSpeed(3, 1);
+    assert.deepEqual(latest, pausedFrame, 'speed changes preserve the edit position'); replay.resume();
+    while (timer) await step();
+    const expected = new Set(Array.from({ length: removed.length + 1 }, (_, count) => ['head', ...removed.slice(0, count).join('').concat('tail').split('\n').map(line => line.replace(/\r$/, ''))].join('\n')));
+    for (const frame of deletionFrames) assert.ok(expected.has(frame.lines.join('\n')), 'backspacing preserves the prefix and untouched tail, including emoji and CRLF');
+    const intervals = typingTimes.slice(1).map((item, index) => Math.round(item.at - typingTimes[index].at));
+    assert.ok(new Set(intervals).size > 1, 'typing cadence is not uniform');
+    assert.deepEqual(latest.lines, ['head', 'call();', 'next', 'tail']); assert.equal(saved, 1);
+    assert.equal(replay.getState().status, 'complete');
+  } finally { await replay.dispose(); }
+});
+
 test('duration allocation completes every phase within the requested active time', () => {
   const phases = [
     { kind: 'move', units: 0, minimumMs: 100, preferredMs: 300, target: 'file', editIndex: null },

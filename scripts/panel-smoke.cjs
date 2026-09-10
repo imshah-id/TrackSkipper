@@ -92,6 +92,17 @@ async function main() {
     const view = await evaluate(`({rows:document.querySelectorAll('.code-row').length,setupHidden:document.querySelector('#setup').hidden,syntax:document.querySelectorAll('.token-keyword').length,images:document.querySelectorAll('#code img').length,text:[...document.querySelectorAll('.line-content')].slice(0,17).map(node=>node.textContent),pointer:getComputedStyle(document.querySelector('#virtual-pointer')).pointerEvents,font:getComputedStyle(document.querySelector('#code')).fontSize,footerHeight:document.querySelector('.transport').getBoundingClientRect().height})`);
     assert.equal(view.rows, 120); assert.equal(view.setupHidden, true); assert.ok(view.syntax > 0); assert.equal(view.images, 0); assert.deepEqual(view.text, playback.frame.lines); assert.equal(view.pointer, 'none'); assert.equal(view.font, '14px'); assert.ok(view.footerHeight < 40);
     await screenshot('playback-desktop.png');
+    for (const kind of ['type', 'delete', 'wait', 'save']) {
+      await settle(`pushState({...fixturePlayback,phase:{...fixturePlayback.phase,kind:${JSON.stringify(kind)}}})`);
+      assert.equal(await evaluate("document.querySelector('#virtual-pointer').hidden"), true, 'mouse pointer is hidden while typing or waiting');
+    }
+    await settle('pushState({...fixturePlayback,phaseDurationMs:2000})');
+    await evaluate('new Promise(resolve=>setTimeout(resolve,220))');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.click-ring')).opacity"), '0', 'click feedback fades during a long click phase');
+    const beforeScroll = await evaluate("document.querySelector('#virtual-pointer').style.transform");
+    await settle("pushState({...fixturePlayback,phase:{...fixturePlayback.phase,kind:'scroll'},frame:{...fixturePlayback.frame,caret:{row:1,column:0}}})");
+    assert.equal(await evaluate("document.querySelector('#virtual-pointer').style.transform"), beforeScroll, 'scrolling does not drag the mouse to the caret');
+    await settle('pushState(fixturePlayback)');
     const dartPath = 'lib/features/dashboard/dashboard_shell.dart';
     const dartLines = ['class DashboardPage extends StatelessWidget {', '  final String title = "Dashboard";', '  @override', '  Widget build(BuildContext context) => const SizedBox(height: 24);', '}'];
     await settle(`pushState({...fixturePlayback,activePath:${JSON.stringify(dartPath)},files:[{offset:0,label:${JSON.stringify(dartPath)},change:'M'}],tabs:[{offset:0,label:${JSON.stringify(dartPath)}}],frame:{firstLine:0,lines:${JSON.stringify(dartLines)}}})`);

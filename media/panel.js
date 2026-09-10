@@ -192,14 +192,16 @@
   let animation, pointerX = 100, pointerY = 100, phaseKey = '';
   function stopPointer() { if (animation) cancelAnimationFrame(animation); animation = undefined; $('virtual-pointer').classList.remove('clicking'); }
   function pointer() {
-    if (motion.matches || state.status !== 'running' || !state.phase || document.hidden || !$('setup').hidden) { stopPointer(); $('virtual-pointer').hidden = true; phaseKey = ''; return; }
+    if (motion.matches || state.status !== 'running' || !state.phase || !['move', 'hover', 'click', 'scroll'].includes(state.phase.kind) || document.hidden || !$('setup').hidden) { stopPointer(); $('virtual-pointer').hidden = true; phaseKey = ''; return; }
     const key = `${state.recordNumber}:${state.phase.kind}:${state.phase.editIndex}:${state.phase.target}`;
     if (key === phaseKey) return; phaseKey = key; stopPointer();
     const marker = $('virtual-pointer'); marker.hidden = false;
     let target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('file-path') : document.querySelector('.caret') || $('code');
     if (target.closest('.folder:not([open])')) target = $('file-path');
-    const rect = target.getBoundingClientRect(), targetX = Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2))), targetY = Math.max(5, Math.min(innerHeight - 32, rect.top + 8));
-    const startX = pointerX, startY = pointerY, moving = state.phase.kind === 'move' || state.phase.kind === 'scroll';
+    const rect = target.getBoundingClientRect(), scrolling = state.phase.kind === 'scroll';
+    const targetX = scrolling ? pointerX : Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2)));
+    const targetY = scrolling ? pointerY : Math.max(5, Math.min(innerHeight - 32, rect.top + 8));
+    const startX = pointerX, startY = pointerY, moving = state.phase.kind === 'move';
     const duration = moving ? Math.max(1, state.phaseDurationMs - state.phaseElapsedMs) : 0, began = performance.now(); let previous = -Infinity;
     const tick = now => {
       if (now - previous < 1000 / 30) { animation = requestAnimationFrame(tick); return; } previous = now;

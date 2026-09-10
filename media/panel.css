@@ -193,7 +193,8 @@ progress::-webkit-progress-value { background: var(--focus) }
 .playback-settings .hint { margin: 5px 0 0; font-size: 11px }
 .virtual-pointer { position: fixed; top: 0; left: 0; z-index: 10; pointer-events: none; will-change: transform; filter: drop-shadow(0 2px 2px #0006) }
 .click-ring { position: absolute; width: 24px; height: 24px; left: -10px; top: -10px; border-radius: 50%; border: 2px solid var(--focus); opacity: 0 }
-.virtual-pointer.clicking .click-ring { opacity: .8 }
+.virtual-pointer.clicking .click-ring { animation: pointer-click 160ms ease-out both }
+@keyframes pointer-click { from { opacity: .8; transform: scale(.65) } to { opacity: 0; transform: scale(1.15) } }
 ::-webkit-scrollbar { width: 10px; height: 8px }
 ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, #79797966) }
 ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, #646464b3) }
