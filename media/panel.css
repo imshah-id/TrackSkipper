@@ -118,7 +118,7 @@ body.vscode-light .file-tag[data-change=D] { color: var(--vscode-gitDecoration-d
 .file-button.selected:focus-visible { background: var(--vscode-list-activeSelectionBackground, var(--selection)); color: var(--vscode-list-activeSelectionForeground, var(--text)) }
 .file-button:hover:not(:disabled) { background: var(--vscode-list-hoverBackground, var(--selection)) }
 .files-hint { margin: 0; padding: 8px 12px; color: var(--muted); font-size: 11px; border-top: 1px solid var(--border) }
-.file-button:disabled, .tab:disabled { opacity: 1 }
+.file-button:disabled, .tab-select:disabled, .tab-close:disabled { opacity: 1 }
 .file-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; font: 600 10px var(--mono); color: var(--vscode-symbolIcon-fileForeground, var(--muted)); text-align: center }
 .file-icon[data-kind=ts] { color: #519aba }
 .file-icon[data-kind=js] { color: #cbcb41 }
@@ -131,9 +131,15 @@ body.vscode-light .file-icon:is([data-kind=js], [data-kind=json]) { color: #795e
 body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
 .clear-session { margin: 2px 8px 8px; align-self: flex-start; font-size: 11px }
 .editor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg) }
-.tabs { display: flex; height: 35px; flex: none; overflow: auto; background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar)) }
-.tab { flex: none; max-width: 260px; display: flex; gap: 8px; align-items: center; padding: 0 11px; border-radius: 0; border-top: 1px solid transparent; border-right: 1px solid var(--vscode-tab-border, var(--border)); font-size: 12px; color: var(--vscode-tab-inactiveForeground, var(--muted)); background: var(--vscode-tab-inactiveBackground, var(--sidebar)) }
-.tab>span:not(.file-icon) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tabs { display: flex; height: 35px; flex: none; overflow-x: auto; overflow-y: hidden; background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar)) }
+.tab { flex: none; max-width: 260px; display: flex; gap: 2px; align-items: center; padding: 0 5px 0 0; border-radius: 0; border-top: 1px solid transparent; border-right: 1px solid var(--vscode-tab-border, var(--border)); font-size: 12px; color: var(--vscode-tab-inactiveForeground, var(--muted)); background: var(--vscode-tab-inactiveBackground, var(--sidebar)) }
+.tab-select>span:not(.file-icon) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.tab-select { min-width: 0; height: 100%; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 11px; border: 0; border-radius: 0; color: inherit; background: transparent; font-size: inherit }
+.tab-close { flex: none; width: 22px; height: 22px; display: grid; place-items: center; padding: 3px; border: 0; background: transparent; color: inherit; opacity: 0 }
+.tab:is(:hover, :focus-within, .selected) .tab-close { opacity: 1 }
+.tab-close:focus-visible { opacity: 1 }
+.tab-close:hover { background: var(--vscode-toolbar-hoverBackground, #8883) }
+.tabs::-webkit-scrollbar { height: 3px }
 .tab.selected { border-top-color: var(--vscode-tab-activeBorderTop, var(--focus)); color: var(--vscode-tab-activeForeground, var(--text)); background: var(--vscode-tab-activeBackground, var(--bg)) }
 .breadcrumbs { height: 24px; display: flex; align-items: center; gap: 8px; padding: 0 12px; flex: none; color: var(--vscode-breadcrumb-foreground, var(--muted)); font-size: 12px }
 .breadcrumbs>span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -151,7 +157,9 @@ body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
 .code-row.active { background: var(--vscode-editor-lineHighlightBackground, transparent); outline: 1px solid var(--vscode-editor-lineHighlightBorder, var(--border)); outline-offset: -1px }
 .line-number { width: 62px; flex: none; padding-right: 24px; text-align: right; user-select: none; color: var(--vscode-editorLineNumber-foreground, #6e7681) }
 .active .line-number { color: var(--vscode-editorLineNumber-activeForeground, var(--text)) }
-.line-content { display: block; min-width: 1px; padding-right: 28px; white-space: pre }
+.line-content { position: relative; display: block; min-width: 1px; padding-right: 28px; white-space: pre }
+.line-content::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--indent-width, 0ch); pointer-events: none; background-image: linear-gradient(to right, var(--vscode-editorIndentGuide-background1, #80808040) 1px, transparent 1px); background-size: calc(var(--tab-size, 4) * 1ch) 100%; background-repeat: repeat-x }
+.active .line-content::before { background-image: linear-gradient(to right, var(--vscode-editorIndentGuide-activeBackground1, #80808080) 1px, transparent 1px) }
 .caret { display: inline-block; height: 1.2em; width: 0; border-left: 2px solid var(--vscode-editorCursor-foreground, #aeafad); vertical-align: -.2em; margin-right: -2px }
 .token-comment { color: #6a9955 }
 .token-string { color: #ce9178 }

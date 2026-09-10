@@ -1,6 +1,6 @@
 import { validateTiming } from './timing';
 import { Timing } from './types';
-export type PanelCommand = { type: string; sessionId: string; action?: 'arm' | 'pulse' | 'stop'; at?: number; firstLine?: number; offset?: number; pathBase64?: string; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
+export type PanelCommand = { type: string; sessionId: string; action?: 'arm' | 'pulse' | 'stop'; at?: number; firstLine?: number; rows?: number; offset?: number; pathBase64?: string; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
 export function validCommand(value: unknown, sessionId: string): value is PanelCommand {
   if (!value || typeof value !== 'object') return false;
   const input = value as Record<string, unknown>;
@@ -24,11 +24,14 @@ export function validCommand(value: unknown, sessionId: string): value is PanelC
   } else if (input.type === 'speed') {
     keys.push('charactersPerSecond', 'pointerMultiplier');
     try { validateTiming({ mode: 'speed', charactersPerSecond: input.charactersPerSecond, pointerMultiplier: input.pointerMultiplier }); } catch { return false; }
-  } else if (input.type === 'browse' && input.pathBase64 !== undefined) {
+  } else if (input.type === 'viewportSize') {
+    keys.push('rows');
+    if (!Number.isSafeInteger(input.rows) || (input.rows as number) < 1 || (input.rows as number) > 120) return false;
+  } else if (['browse', 'closeTab'].includes(input.type) && input.pathBase64 !== undefined) {
     keys.push('pathBase64');
     if (typeof input.pathBase64 !== 'string' || !input.pathBase64.length || input.pathBase64.length > 65536
       || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.pathBase64)) return false;
-  } else if (input.type === 'viewport' || input.type === 'browse') {
+  } else if (input.type === 'viewport' || input.type === 'browse' || input.type === 'closeTab') {
     const key = input.type === 'viewport' ? 'firstLine' : 'offset'; keys.push(key);
     if (!Number.isSafeInteger(input[key]) || (input[key] as number) < 0) return false;
   } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow', 'fullscreen'].includes(input.type)) return false;

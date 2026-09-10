@@ -5,6 +5,9 @@ test('panel accepts only bounded controls for its own session', () => {
   assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: 'YS50cw==' }, 'one'), true);
   assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: 'YS50cw==', offset: 0 }, 'one'), false);
   assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: '../bad' }, 'one'), false);
+  assert.equal(validCommand({ type: 'viewportSize', sessionId: 'one', rows: 30 }, 'one'), true);
+  assert.equal(validCommand({ type: 'viewportSize', sessionId: 'one', rows: 121 }, 'one'), false);
+  assert.equal(validCommand({ type: 'closeTab', sessionId: 'one', offset: 0 }, 'one'), true);
   assert.equal(validCommand({ type: 'pause', sessionId: 'one' }, 'one'), true);
   assert.equal(validCommand({ type: 'pause', sessionId: 'old' }, 'one'), false);
   assert.equal(validCommand({ type: 'speed', sessionId: 'one', charactersPerSecond: 24, pointerMultiplier: 1 }, 'one'), true);

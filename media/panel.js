@@ -21,7 +21,7 @@
     return node;
   };
   function glyph(name) {
-    const paths = { fullscreen: 'M6 2H2v4 M10 2h4v4 M14 10v4h-4 M6 14H2v-4', file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', folder: 'M1.5 3h5l2 2h6v8h-13z', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
+    const paths = { close: 'm4 4 8 8 M12 4l-8 8', fullscreen: 'M6 2H2v4 M10 2h4v4 M14 10v4h-4 M6 14H2v-4', file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', folder: 'M1.5 3h5l2 2h6v8h-13z', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), path = document.createElementNS(svg.namespaceURI, 'path');
     svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('ui-icon');
     path.setAttribute('d', paths[name] || paths.file); svg.append(path); return svg;
@@ -164,13 +164,26 @@
     return { row, number, content, key: '', tokenKey: '', parsed: null };
   });
   $('code').append(...rows.map(item => item.row));
+  let codePath = '', codeFirstLine = -1;
   function renderCode(frame) {
     if (!frame) return;
+    if (codePath !== state.activePath) $('code-scroll').scrollLeft = 0;
+    if (codePath !== state.activePath || codeFirstLine !== frame.firstLine) $('code-scroll').scrollTop = 0;
+    codePath = state.activePath; codeFirstLine = frame.firstLine;
     const language = state.activePath?.split('.').pop().toLowerCase() || ''; let block = false;
     rows.forEach((item, index) => {
       item.row.hidden = index >= frame.lines.length; if (item.row.hidden) return;
       item.number.textContent = String(frame.firstLine + index + 1);
-      const line = frame.lines[index], column = frame.caret?.row === index ? frame.caret.column : -1;
+      const line = frame.lines[index];
+      const tabSize = Math.max(1, Math.min(16, Number(state.editor?.tabSize) || 4));
+      let indent = 0;
+      for (const character of line) {
+        if (character === ' ') indent++;
+        else if (character === '\t') indent += tabSize - indent % tabSize;
+        else break;
+      }
+      item.content.style.setProperty('--indent-width', `${indent}ch`);
+      const column = frame.caret?.row === index ? frame.caret.column : -1;
       item.row.classList.toggle('active', column >= 0);
       const tokenKey = JSON.stringify([line, language, block]);
       if (item.tokenKey !== tokenKey) { item.tokenKey = tokenKey; item.parsed = tokens(line, language, block); }
@@ -295,6 +308,7 @@
     if (fixed) { $('typing').value = state.timing.charactersPerSecond; $('pointer-speed').value = state.timing.pointerMultiplier; }
     $('typing-value').textContent = fixed ? `${state.timing.charactersPerSecond} char/s` : 'Automatic'; $('pointer-value').textContent = fixed ? `${state.timing.pointerMultiplier}×` : 'Automatic';
     $('timing-hint').textContent = fixed ? 'Pause to adjust speed; resume when ready.' : 'Typing and pauses fit the selected duration.';
+    $('empty-message').textContent = state.tabs?.length ? 'Opening the first file…' : 'Select a file or follow playback';
     $('empty').hidden = !!state.frame; $('code-scroll').hidden = !state.frame;
     $('empty-message').textContent = state.status === 'complete' ? 'Replay complete. This range contains no animated text.' : 'Opening the first file…';
     $('new-replay').disabled = preparing || running;
@@ -320,15 +334,37 @@
     const tabsKey = JSON.stringify([state.tabs, state.activePath, running]);
     if (tabsKey !== lastTabs) {
       lastTabs = tabsKey;
+      const focused = document.activeElement.closest('.tab');
+      const focusedLabel = focused?.dataset.path, focusedClose = document.activeElement.classList.contains('tab-close');
+      const scrollLeft = $('tabs').scrollLeft;
       $('tabs').replaceChildren(...(state.tabs || []).map(tab => {
-        const button = document.createElement('button'), label = document.createElement('span');
-        button.className = `tab${tab.label === state.activePath ? ' selected' : ''}`; label.textContent = tab.label.split('/').pop(); button.title = tab.label; button.disabled = running;
+        const wrapper = document.createElement('div'), button = document.createElement('button'), label = document.createElement('span'), close = document.createElement('button');
+        const target = tab.pathBase64 ? { pathBase64: tab.pathBase64 } : { offset: tab.offset };
+        wrapper.className = `tab${tab.label === state.activePath ? ' selected' : ''}`; wrapper.dataset.path = tab.label;
+        button.className = 'tab-select'; button.title = tab.label; button.disabled = close.disabled = running;
+        label.textContent = tab.label.split('/').pop();
         button.setAttribute('aria-current', String(tab.label === state.activePath)); button.append(icon(tab.label), label);
-        button.addEventListener('click', () => send('browse', tab.pathBase64 ? { pathBase64: tab.pathBase64 } : { offset: tab.offset })); return button;
+        button.addEventListener('click', () => send('browse', target));
+        close.className = 'tab-close'; close.title = `Close ${tab.label}`; close.setAttribute('aria-label', close.title); close.append(glyph('close'));
+        close.addEventListener('click', () => send('closeTab', target));
+        wrapper.addEventListener('mousedown', event => { if (event.button === 1) event.preventDefault(); });
+        wrapper.addEventListener('auxclick', event => { if (event.button === 1) { event.preventDefault(); if (!running) send('closeTab', target); } });
+        wrapper.append(button, close); return wrapper;
       }));
+      $('tabs').scrollLeft = scrollLeft;
+      const active = $('tabs').querySelector('.selected');
+      if (active && !controlsHidden) {
+        const tabRect = active.getBoundingClientRect(), strip = $('tabs').getBoundingClientRect();
+        if (tabRect.left < strip.left) $('tabs').scrollLeft -= strip.left - tabRect.left;
+        else if (tabRect.right > strip.right) $('tabs').scrollLeft += tabRect.right - strip.right;
+      }
+      if (focusedLabel) {
+        const replacement = [...$('tabs').children].find(tab => tab.dataset.path === focusedLabel) || active;
+        replacement?.querySelector(focusedClose ? '.tab-close' : '.tab-select')?.focus({ preventScroll: true });
+      }
       if (!state.tabs?.length) { const tab = document.createElement('span'); tab.className = 'tab empty-tab'; tab.textContent = 'Preview'; $('tabs').append(tab); }
     }
-    renderCode(state.frame); pointer();
+    renderCode(state.frame); reportViewportSize(); pointer();
   }
   window.addEventListener('message', event => {
     if (event.data?.type === 'state') { if (sessionId !== event.data.sessionId) stopNative(); state = event.data; sessionId = state.sessionId; render(); }
@@ -366,6 +402,19 @@
   for (const id of ['stop', 'restart', 'clear', 'follow']) $(id).addEventListener('click', () => send(id));
   const changeSpeed = () => send('speed', { charactersPerSecond: Number($('typing').value), pointerMultiplier: Number($('pointer-speed').value) });
   $('typing').addEventListener('change', changeSpeed); $('pointer-speed').addEventListener('change', changeSpeed);
+  let viewportKey = '';
+  const reportViewportSize = () => {
+    if ($('code-scroll').hidden || !$('setup').hidden || !$('code-scroll').clientHeight) return;
+    const lineHeight = parseFloat(getComputedStyle($('code')).lineHeight);
+    const rows = Math.max(1, Math.min(120, Math.floor(($('code-scroll').clientHeight - 8) / lineHeight)));
+    const key = `${sessionId}:${rows}`;
+    if (Number.isFinite(rows) && key !== viewportKey) { viewportKey = key; send('viewportSize', { rows }); }
+  };
+  new ResizeObserver(reportViewportSize).observe($('code-scroll'));
+  $('tabs').addEventListener('wheel', event => {
+    if (!event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY) || $('tabs').scrollWidth <= $('tabs').clientWidth) return;
+    event.preventDefault(); $('tabs').scrollLeft += event.deltaY;
+  }, { passive: false });
   let wheelAt = 0;
   $('code-scroll').addEventListener('wheel', event => {
     if (!state.frame || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;

@@ -101,6 +101,8 @@ function host(options = {}) {
         record: events.record,
         async pause() { status = 'paused'; controller.emit(); },
         resume() { status = 'running'; controller.emit(); },
+        follow() { controller.emit(); },
+        setViewportRows() {},
         setViewport(firstLine) { controller.emit(firstLine); },
         async dispose() {},
       };
@@ -450,7 +452,7 @@ test('explorer shows and browses unchanged repository files, including beyond th
     await app.send('browse', { pathBase64: file.pathBase64 });
     assert.equal(app.state().activePath, 'nested/file-119.ts');
     assert.match(app.state().frame.lines[0], /b line 0/);
-    assert.equal(app.state().tabs[0].pathBase64, file.pathBase64);
+    assert.equal(app.state().tabs.at(-1).pathBase64, file.pathBase64);
     await app.send('viewport', { firstLine: 6 });
     assert.match(app.state().frame.lines[0], /b line 6/);
     await app.send('browse', { pathBase64: Buffer.from('/outside.txt').toString('base64') });
@@ -489,5 +491,28 @@ test('special repository entries remain inert and scrolling retains their previe
       assert.equal(app.state().activePath, name);
       assert.match(app.state().frame.lines[0], description);
     }
+  } finally { await app.dispose(); }
+});
+
+test('closing tabs selects a neighbor, closing the last clears the preview, and follow reopens playback', async () => {
+  const app = host();
+  try {
+    await app.open(); await app.send('resume'); await app.send('pause');
+    const pathBase64 = Buffer.from('README.md').toString('base64');
+    await app.send('browse', { pathBase64 });
+    assert.deepEqual(app.state().tabs.map(tab => tab.label), ['a.ts', 'README.md']);
+    await app.send('closeTab', { pathBase64 });
+    assert.equal(app.state().activePath, 'a.ts');
+    assert.equal(app.state().tabs.length, 1);
+    await app.send('closeTab', { offset: 0 });
+    assert.equal(app.state().tabs.length, 0);
+    assert.equal(app.state().frame, undefined);
+    app.controllers[0].emit(); await app.send('ready');
+    assert.equal(app.state().frame, undefined, 'a refresh cannot reopen the closed preview');
+    await app.send('follow');
+    assert.equal(app.state().activePath, 'a.ts');
+    assert.equal(app.state().tabs.length, 1);
+    await app.send('resume'); await app.send('closeTab', { offset: 0 });
+    assert.equal(app.state().tabs.length, 1, 'tab closing waits until playback is paused');
   } finally { await app.dispose(); }
 });

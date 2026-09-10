@@ -20,6 +20,7 @@ export function activate(context: vscode.ExtensionContext): void {
   let preparation: AbortController | undefined, busy = false, error = '', notice = '';
   let frame: Frame | undefined, phase: Phase | undefined, phaseElapsedMs = 0, phaseDurationMs = 0;
   let browseView: ReturnType<typeof createTextView> | undefined;
+  let previewClosed = false, viewportRows = 30;
   let recent: Array<{ offset?: number; pathBase64?: string; label: string }> = [];
   let repositoryFiles: Array<TreeFile & { label: string }> = [];
   let currentCommit = '';
@@ -48,6 +49,19 @@ export function activate(context: vscode.ExtensionContext): void {
       fontWeight: configuration.get<string>('fontWeight', 'normal'), lineHeight: configuration.get<number>('lineHeight', 0), tabSize: configuration.get<number>('tabSize', 4) };
   };
   let editor = editorSettings();
+
+  function openTab(tab: typeof recent[number]): void {
+    const index = recent.findIndex(item => item.label === tab.label);
+    if (index < 0) recent = [...recent, tab].slice(-5);
+    else recent[index] = tab;
+    previewClosed = false;
+  }
+  function followReplay(): void {
+    previewClosed = false; browseView = undefined;
+    const state = replay?.getState(), record = state?.record;
+    if (record && record.kind !== 'milestone') openTab({ offset: state!.position.recordOffset, label: label(record.change.pathBase64) });
+    replay?.follow();
+  }
 
   function send(force = false): void {
     if (!panel?.visible) return;
@@ -167,7 +181,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (!plan || !store) return;
     const activePlan = plan, activeStore = store;
     replay = createReplay(activePlan, systemClock, {
-      frame: (value, action, elapsed, duration) => { frame = value; phase = action; phaseElapsedMs = elapsed; phaseDurationMs = duration;
+      frame: (value, action, elapsed, duration) => { if (previewClosed || browseView) return; frame = value; phase = action; phaseElapsedMs = elapsed; phaseDurationMs = duration;
         const record = replay?.getState().record; if (record && record.kind !== 'milestone') activePath = label(record.change.pathBase64); send(); },
       progress: () => send(),
       status: status => { if (status !== 'running') native.stop(); send(); }, error: report,
@@ -188,11 +202,12 @@ export function activate(context: vscode.ExtensionContext): void {
         if (oid !== currentCommit) { currentCommit = oid; repositoryFiles = []; void loadFiles(); }
         if (record.kind !== 'milestone') {
           activePath = label(record.change.pathBase64);
-          recent = [{ offset, label: activePath }, ...recent.filter(item => item.label !== activePath)].slice(0, 5);
+          openTab({ offset, label: activePath });
         }
         send();
       },
     });
+    replay.setViewportRows(viewportRows);
     replay.setVisible(panel?.visible ?? false);
   }
 
@@ -246,7 +261,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (['pause', 'stop', 'restart', 'clear'].includes(command.type)) native.stop();
     if (command.type === 'pause') await replay?.pause();
     if (command.type === 'start' || command.type === 'resume') {
-      browseView = undefined;
+      followReplay();
       if (!replay) attachReplay();
       if (replay!.getState().status === 'paused') replay!.resume();
       else if (replay!.getState().status === 'ready') {
@@ -266,7 +281,18 @@ export function activate(context: vscode.ExtensionContext): void {
       if (browseView) frame = frameAt(browseView, 0, browseView.newText.length, command.firstLine!, 120);
       else replay?.setViewport(command.firstLine!);
     }
-    if (command.type === 'follow') { browseView = undefined; replay?.follow(); }
+    if (command.type === 'follow') followReplay();
+    if (command.type === 'viewportSize') { viewportRows = command.rows!; replay?.setViewportRows(viewportRows); }
+    if (command.type === 'closeTab' && replay?.getState().status !== 'running') {
+      const index = recent.findIndex(tab => command.pathBase64 ? tab.pathBase64 === command.pathBase64 : tab.offset === command.offset);
+      if (index < 0) return;
+      const [closed] = recent.splice(index, 1);
+      if (closed.label === activePath) {
+        const next = recent[Math.min(index, recent.length - 1)];
+        if (next) await handle({ type: 'browse', sessionId: sessionId(), ...(next.pathBase64 ? { pathBase64: next.pathBase64 } : { offset: next.offset }) });
+        else { previewClosed = true; browseView = undefined; frame = undefined; activePath = ''; }
+      }
+    }
     if (command.type === 'browse' && command.pathBase64 && replay?.getState().status !== 'running') {
       const file = repositoryFiles.find(file => file.pathBase64 === command.pathBase64);
       if (!file) return;
@@ -283,12 +309,13 @@ export function activate(context: vscode.ExtensionContext): void {
       activePath = file.label;
       browseView = createTextView('', reason || text);
       frame = frameAt(browseView, 0, browseView.newText.length, 0, 120);
-      recent = [{ pathBase64: file.pathBase64, label: activePath }, ...recent.filter(item => item.label !== activePath)].slice(0, 5);
+      openTab({ pathBase64: file.pathBase64, label: activePath });
     }
     if (command.type === 'browse' && command.offset !== undefined && replay?.getState().status !== 'running') {
       for await (const entry of readRecords(plan, command.offset!, new AbortController().signal)) {
         if (entry.record.kind === 'milestone') break;
         activePath = label(entry.record.change.pathBase64);
+        openTab({ offset: entry.offset, label: activePath });
         browseView = undefined;
         if (entry.record.kind === 'text') {
           const text = await textBlob(plan.repo, entry.record.change.newOid, new AbortController().signal);

@@ -173,3 +173,39 @@ test('pause during a durable save recovers, and invalid checkpoints cannot skip 
     await assert.rejects(bad.start(), /record|phase|save/i); await bad.dispose();
   } finally { await controller.dispose(); await fs.rm(root, { recursive: true, force: true }); }
 });
+
+test('following keeps nearby lines still, adapts to the viewport, and respects manual scrolling', async () => {
+  const text = Array.from({ length: 90 }, (_, i) => `line ${i}`).join('\n');
+  const phases = [10, 11, 12, 60].map(editIndex => ({ kind: 'hover', target: 'code', editIndex, units: 0, minimumMs: 0, preferredMs: 1000 }));
+  const edits = Array.from({ length: 90 }, (_, line) => {
+    const start = text.indexOf(`line ${line}`);
+    return { oldStart: start, oldEnd: start, newStart: start, newEnd: start, deleteUnits: 0, insertUnits: 0 };
+  });
+  const record = { kind: 'text', change: { oldOid: 'old', newOid: 'new' }, edits, phases, weight: 1 };
+  const exported = {};
+  require('node:vm').runInNewContext(require('node:fs').readFileSync(require.resolve('../dist/replay.js'), 'utf8'), {
+    exports: exported, Buffer, performance, setTimeout, clearTimeout, AbortController,
+    require: name => name === './plan' ? { textBlob: async () => text, readRecords: async function* () { yield { record, offset: 0, nextOffset: 1 }; } }
+      : require(require('node:path').resolve(__dirname, '../dist', name)),
+  });
+  let now = 0, timer, frame;
+  const controller = exported.createReplay({ timing: { mode: 'speed', charactersPerSecond: 24, pointerMultiplier: 1 }, totals: { minimumMs: 0, preferredMs: 4000, weight: 1, records: 1 } },
+    { now: () => now, wallNow: () => now, schedule: (callback, delay) => { timer = { callback, delay }; }, cancel() {} },
+    { frame: value => frame = value, progress() {}, save: async () => {}, checkpoint: async () => {}, error: message => assert.fail(message) });
+  try {
+    await controller.start();
+    const firstLine = frame.firstLine;
+    for (let i = 0; i < 2; i++) { now += timer.delay; await timer.callback(); assert.equal(frame.firstLine, firstLine); }
+    now += timer.delay; await timer.callback();
+    assert.ok(frame.firstLine > firstLine, 'a distant edit brings its surrounding code into view');
+    controller.setViewportRows(8);
+    assert.ok(frame.caret.row < 8, 'the caret fits in a short editor');
+    controller.setViewport(0); controller.setViewportRows(12);
+    assert.equal(frame.firstLine, 0, 'resizing respects a manually chosen viewport');
+    controller.follow();
+    assert.ok(frame.caret.row < 12);
+    const finalViewport = frame.firstLine;
+    now += timer.delay; await timer.callback();
+    assert.equal(frame.firstLine, finalViewport, 'completion does not jump to the end of the file');
+  } finally { await controller.dispose(); }
+});

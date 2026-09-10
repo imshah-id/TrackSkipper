@@ -41,6 +41,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   let timer: unknown, pending = Promise.resolve();
   let visible = true, lastTime = 0, lastWall = 0, delay = 0, lastFrameTime = -Infinity;
   let oldBoundary = 0, newBoundary = 0, viewport: number | undefined;
+  let viewportRows = 30, followLine = 0;
   let phaseView: TextView | undefined, deletionView: TextView | undefined, deletionEdit = -1;
   let stepOffsets = new Uint32Array(0), stepBeats = new Float64Array(0), consumed = 0, totalBeats = 0;
   let totalMs = timing.mode === 'duration' ? timing.durationMs : plan.totals.preferredMs;
@@ -116,13 +117,22 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     updateBoundaries();
   }
 
+  function firstVisibleLine(caretLine: number): number {
+    if (viewport !== undefined) return viewport;
+    const margin = Math.min(4, Math.floor((viewportRows - 1) / 3));
+    if (caretLine < followLine + margin || caretLine >= followLine + viewportRows - margin) {
+      followLine = Math.max(0, caretLine - Math.floor(viewportRows / 3));
+    }
+    return followLine;
+  }
+
   function emit(force = false): void {
     events.progress({ ...position });
     if (!visible || !current() || (!force && clock.now() - lastFrameTime < 1000 / LIMITS.hostHz)) return;
     const item = current()!;
     let frame: Frame;
     if (phaseView) {
-      const firstLine = viewport ?? Math.max(0, lineAt(phaseView.newLineStarts, newBoundary) - 6);
+      const firstLine = item.phase.kind === 'save' ? viewport ?? followLine : firstVisibleLine(lineAt(phaseView.newLineStarts, newBoundary));
       frame = frameAt(phaseView, oldBoundary, newBoundary, firstLine, LIMITS.frameRows);
     } else frame = { firstLine: 0, lines: [record?.kind === 'milestone' ? 'No file changes in this commit.' : (record as FileRecord | undefined)?.reason ?? 'Saving exact file bytes.'], caret: null };
     lastFrameTime = clock.now(); events.frame(frame, item.phase, position.phaseElapsedMs, item.duration);
@@ -132,14 +142,14 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     const next = await iterator!.next();
     if (next.done) {
       if (visible && view && record) {
-        const firstLine = viewport ?? Math.max(0, lineAt(view.newLineStarts, view.newText.length) - 6);
+        const firstLine = viewport ?? followLine;
         events.frame(frameAt(view, view.oldText.length, view.newText.length, firstLine, LIMITS.frameRows), record.phases.at(-1)!, 0, 0);
       }
       record = undefined; view = phaseView = deletionView = undefined; schedule = [];
       stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0); return false;
     }
     record = next.value.record; nextOffset = next.value.nextOffset; position.recordOffset = next.value.offset;
-    schedule = makeSchedule(record); viewport = undefined; view = undefined; deletionView = undefined; deletionEdit = -1; oldBoundary = 0; newBoundary = 0;
+    schedule = makeSchedule(record); viewport = undefined; followLine = 0; view = undefined; deletionView = undefined; deletionEdit = -1; oldBoundary = 0; newBoundary = 0;
     if (record.kind === 'text') view = createTextView(await textBlob(plan.repo, record.change.oldOid, cancellation.signal), await textBlob(plan.repo, record.change.newOid, cancellation.signal));
     if (!Number.isSafeInteger(position.phaseIndex) || position.phaseIndex >= schedule.length || position.phaseIndex < 0
       || position.phaseElapsedMs < 0 || !Number.isFinite(position.phaseElapsedMs)
@@ -229,6 +239,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     },
     setVisible(value: boolean): void { visible = value; if (value) emit(true); },
     setViewport(firstLine: number): void { if (Number.isSafeInteger(firstLine) && firstLine >= 0) { viewport = firstLine; emit(true); } },
+    setViewportRows(rows: number): void { if (Number.isSafeInteger(rows) && rows >= 1 && rows <= LIMITS.frameRows) { viewportRows = rows; emit(true); } },
     follow(): void { viewport = undefined; emit(true); },
     async setSpeed(charactersPerSecond: number, pointerMultiplier: number): Promise<void> {
       if (status !== 'paused' || timing.mode !== 'speed') throw new Error('Pause a fixed-speed replay before changing speed');
