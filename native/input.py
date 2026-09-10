@@ -14,6 +14,10 @@ def bind(lib, name, result, *args):
     return function
 
 
+class InputInterrupted(ValueError):
+    """A changed physical target suspends delivery until the preview requests a new arm."""
+
+
 class Mac:
     def __init__(self):
         self.cg = C.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
@@ -78,7 +82,7 @@ class Mac:
 
     def focused_element(self):
         if self.frontmost_pid() != self.app_pid:
-            raise ValueError('Focused application changed; re-arm VM input.')
+            raise InputInterrupted('Focused application changed; return to the replay preview.')
         return self.read_attribute(self.app, 'AXFocusedUIElement')
 
     def prepare_accessibility(self):
@@ -250,13 +254,13 @@ class Guard:
         if type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 <= time.time() * 1000 - stamp <= 250:
             raise ValueError('Input heartbeat expired; click the input field to re-arm.')
         if command.get('op') == 'arm' and self.anchor is None:
-            if self.backend.busy(): raise ValueError('Release all keys and mouse buttons before arming.')
+            if self.backend.busy(): raise InputInterrupted('Release all keys and mouse buttons before arming.')
             self.anchor = self.backend.snapshot()
             return 'armed'
         if command.get('op') != 'pulse' or self.anchor is None or command.get('kind') not in ('type', 'delete', 'move', 'click'):
             raise ValueError('Invalid or unarmed native input request.')
         if self.backend.snapshot() != self.anchor or self.backend.busy():
-            raise ValueError('Focus, pointer, or physical input changed; click the input field to re-arm.')
+            raise InputInterrupted('Focus, pointer, or physical input changed; return to the replay preview.')
         if not 0 <= time.time() * 1000 - stamp <= 250:
             raise ValueError('Input heartbeat expired during the native focus check; re-arm VM input.')
         if time.monotonic() - self.last >= 0.5:
@@ -276,7 +280,7 @@ def main():
             if len(line) > 1024: raise ValueError('Oversized input request.')
             print(json.dumps({'status': guard.handle(json.loads(line))}), flush=True)
     except Exception as error:
-        print(json.dumps({'error': str(error)[:512]}), flush=True)
+        print(json.dumps({'error': str(error)[:512], 'retry': isinstance(error, InputInterrupted)}), flush=True)
         sys.exit(1)
 
 

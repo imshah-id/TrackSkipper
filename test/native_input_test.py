@@ -36,7 +36,8 @@ class SafetyTest(unittest.TestCase):
                 if mutation == 'focus': backend.current = (2, (100, 100))
                 if mutation == 'pointer': backend.current = (1, (101, 100))
                 if mutation == 'held': backend.held = True
-                with self.assertRaises(ValueError):
+                error = module.InputInterrupted if mutation in ('focus', 'pointer', 'held') else ValueError
+                with self.assertRaises(error):
                     guard.handle({'op': 'pulse', 'kind': 'exec' if mutation == 'unknown' else 'type', 'at': 99000 if mutation == 'stale' else 100000})
                 self.assertEqual(backend.events, [])
         backend = Backend()

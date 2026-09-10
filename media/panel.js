@@ -30,7 +30,6 @@
   document.querySelectorAll('[data-fullscreen]').forEach(button => button.addEventListener('click', () => send('fullscreen')));
 
   function renderControls() {
-    if (controlsHidden) stopNative();
     $('playback').classList.toggle('controls-hidden', controlsHidden);
     $('controls-label').textContent = controlsHidden ? 'Show controls' : 'Hide controls';
     $('toggle-controls').setAttribute('aria-label', $('controls-label').textContent);
@@ -190,40 +189,54 @@
       item.content.replaceChildren(...children);
     });
   }
-  let nativeArmed = false, nativeTimer;
+  let nativeArmed = false, nativeRequested = false, nativeTimer, nativeQuietUntil = 0, lastNativeStatus = 'Off';
+  function nativeStatus() {
+    const label = $('native-enabled').checked && !nativeArmed
+      ? 'Enabled · click the preview to resume · Escape to turn off' : state.nativeStatus || 'Off';
+    if ($('native-status').textContent !== label) $('native-status').textContent = label;
+  }
+  function suspendNative() {
+    if (nativeArmed) { nativeArmed = false; send('nativeInput', { action: 'stop', at: Date.now() }); }
+    nativeQuietUntil = performance.now() + 300;
+    nativeStatus();
+  }
   function stopNative() {
-    const wasArmed = nativeArmed;
-    nativeArmed = false; clearInterval(nativeTimer); nativeTimer = undefined;
+    nativeRequested = false; clearInterval(nativeTimer); nativeTimer = undefined;
     $('native-enabled').checked = false; $('native-pad').hidden = true;
-    if (wasArmed) send('nativeInput', { action: 'stop', at: Date.now() });
+    suspendNative();
+  }
+  function nativeTick() {
+    if (!nativeRequested) return;
+    const pad = $('native-pad');
+    if (document.hidden || !document.hasFocus() || document.activeElement !== pad || !pad.matches(':hover')
+      || pad.hidden || !state.frame || state.status !== 'running') { suspendNative(); return; }
+    if (performance.now() < nativeQuietUntil) return;
+    if (!nativeArmed) { nativeArmed = true; send('nativeInput', { action: 'arm', at: Date.now() }); }
+    else send('nativeInput', { action: 'pulse', at: Date.now() });
   }
   $('native-enabled').addEventListener('change', () => {
     if (!$('native-enabled').checked) stopNative();
-    else $('native-pad').hidden = false;
+    else { $('native-pad').hidden = false; $('code-scroll').scrollTop = $('code-scroll').scrollLeft = 0; nativeStatus(); }
   });
   function armNative(event) {
     if (!event.isTrusted || nativeArmed || !$('native-enabled').checked || state.status !== 'running') return;
-    if (event.type === 'keydown' && !$('native-pad').matches(':hover')) { $('native-status').textContent = 'Park the pointer inside the input field before arming.'; return; }
-    nativeArmed = true;
-    send('nativeInput', { action: 'arm', at: Date.now() });
-    nativeTimer = setInterval(() => {
-      if (document.hidden || !document.hasFocus() || document.activeElement !== $('native-pad') || state.status !== 'running') { stopNative(); return; }
-      send('nativeInput', { action: 'pulse', at: Date.now() });
-    }, 100);
+    if (event.type === 'keydown' && !$('native-pad').matches(':hover')) { $('native-status').textContent = 'Park the pointer inside the preview before arming.'; return; }
+    nativeRequested = true; nativeQuietUntil = 0;
+    nativeTimer ??= setInterval(nativeTick, 100);
+    nativeTick();
   }
   $('native-pad').addEventListener('click', armNative);
   $('native-pad').addEventListener('keydown', event => {
     if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); armNative(event); }
-    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); stopNative(); }
     else if (['a', 'A', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); }
   });
-  $('native-pad').addEventListener('blur', stopNative);
-  $('native-pad').addEventListener('pointerleave', () => { if (nativeArmed) stopNative(); });
-  document.addEventListener('pointermove', event => { if (nativeArmed && (event.movementX || event.movementY)) stopNative(); }, true);
-  window.addEventListener('blur', stopNative);
-  window.addEventListener('resize', stopNative);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) stopNative(); });
-  document.addEventListener('scroll', () => { if (nativeArmed) stopNative(); }, true);
+  $('native-pad').addEventListener('blur', suspendNative);
+  $('native-pad').addEventListener('pointerleave', suspendNative);
+  document.addEventListener('pointermove', event => { if (event.movementX || event.movementY) suspendNative(); }, true);
+  window.addEventListener('blur', suspendNative);
+  window.addEventListener('resize', suspendNative);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) suspendNative(); });
+  document.addEventListener('scroll', () => { if (nativeRequested) suspendNative(); }, true);
   let animation, pointerX = 100, pointerY = 100, phaseKey = '';
   function stopPointer() { if (animation) cancelAnimationFrame(animation); animation = undefined; $('virtual-pointer').classList.remove('clicking'); }
   function pointer() {
@@ -249,10 +262,18 @@
   }
   let lastFiles = '', lastTabs = '', lastEditor = '';
   function render() {
-    if ($('native-status').textContent !== (state.nativeStatus || 'Off')) $('native-status').textContent = state.nativeStatus || 'Off';
-    $('native-enabled').disabled = state.status !== 'running';
-    if (nativeArmed && state.status !== 'running') stopNative();
-    if (nativeArmed && !/^(Starting|Ready|Armed)/.test(state.nativeStatus || '')) { nativeArmed = false; stopNative(); }
+    $('native-enabled').disabled = !state.configured || !['running', 'paused'].includes(state.status);
+    if ($('native-enabled').checked && !['running', 'paused'].includes(state.status)) stopNative();
+    else if (state.status === 'paused') suspendNative();
+    if (state.nativeStatus !== lastNativeStatus) {
+      lastNativeStatus = state.nativeStatus;
+      if (nativeRequested && (state.nativeStatus === 'Off' || state.nativeStatus?.startsWith('Waiting'))) {
+        nativeArmed = false; nativeQuietUntil = performance.now() + (state.nativeStatus === 'Off' ? 300 : 1000);
+      } else if (nativeRequested && state.nativeStatus && !/^(Starting|Ready|Armed)/.test(state.nativeStatus)) {
+        nativeArmed = false; stopNative();
+      }
+    }
+    nativeStatus();
     const running = state.status === 'running', preparing = state.status === 'preparing';
     if (running && editingSetup) { editingSetup = false; saveDraft(); }
     const showingSetup = !state.configured || editingSetup;
@@ -311,7 +332,7 @@
     renderCode(state.frame); pointer();
   }
   window.addEventListener('message', event => {
-    if (event.data?.type === 'state') { state = event.data; sessionId = state.sessionId; render(); }
+    if (event.data?.type === 'state') { if (sessionId !== event.data.sessionId) stopNative(); state = event.data; sessionId = state.sessionId; render(); }
     else if (event.data?.type === 'setup' && event.data.sessionId === sessionId) { setup = event.data.setup; renderSetup(); }
   });
   $('repository').addEventListener('change', () => send('repository', { repositoryId: $('repository').value }));
@@ -337,8 +358,9 @@
   $('new-replay').addEventListener('click', () => { editingSetup = true; render(); renderSetup(); });
   $('back').addEventListener('click', () => { editingSetup = false; saveDraft(); render(); });
   $('settings').addEventListener('click', () => { $('playback-settings').hidden = !$('playback-settings').hidden; $('settings').setAttribute('aria-expanded', String(!$('playback-settings').hidden)); });
-  $('toggle-controls').addEventListener('click', () => { controlsHidden = !controlsHidden; renderControls(); saveDraft(); phaseKey = ''; pointer(); });
+  $('toggle-controls').addEventListener('click', () => { suspendNative(); controlsHidden = !controlsHidden; renderControls(); if (nativeRequested) $('native-pad').focus({ preventScroll: true }); saveDraft(); phaseKey = ''; pointer(); });
   document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && $('native-enabled').checked) { event.preventDefault(); stopNative(); }
     if (event.key === 'Escape' && controlsHidden && !$('playback').hidden) { $('toggle-controls').click(); $('toggle-controls').focus(); }
   });
   $('play').addEventListener('click', () => send(state.status === 'running' ? 'pause' : state.status === 'ready' ? 'start' : 'resume'));

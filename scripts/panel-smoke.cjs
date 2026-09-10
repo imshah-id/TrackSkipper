@@ -119,7 +119,25 @@ async function main() {
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
     assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), armsBefore + 1);
     await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'});document.querySelector('#play').focus()");
-    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'stop', 'leaving the input field disarms immediately');
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'stop', 'leaving the preview suspends delivery');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), true, 'focus loss keeps VM input enabled');
+    await settle("pushState({...fixturePlayback,nativeStatus:'Off'});document.querySelector('#toggle-controls').click()");
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), true, 'hiding controls keeps VM input enabled');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.native-input')).display"), 'none');
+    assert.ok(await evaluate("document.querySelector('#native-pad').getBoundingClientRect().height > 100"), 'the input target covers the preview while controls are hidden');
+    const hiddenPad = await evaluate("(()=>{const r=document.querySelector('#native-pad').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()");
+    const resumedArms = await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length");
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...hiddenPad });
+    await evaluate('new Promise(resolve=>setTimeout(resolve,500))');
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), resumedArms + 1, 'returning to the hidden-controls preview resumes input without re-enabling');
+    await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");
+    const beforeRetry = await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length");
+    await evaluate("(async()=>{for(let i=0;i<13;i++){pushState({...fixturePlayback,nativeStatus:'Waiting · return to the replay preview'});await new Promise(resolve=>setTimeout(resolve,100));}})()");
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), beforeRetry + 1, 'routine frames cannot postpone recovery forever');
+    await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), false, 'Escape switches VM input off');
+    assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Escape also restores controls');
 
     await settle('pushState(fixturePlayback)');
 
@@ -162,7 +180,7 @@ async function main() {
     assert.equal(await evaluate("getComputedStyle(document.querySelector('#playback-settings')).display"), 'none');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.tabs')).display"), 'none', 'hidden controls remove the duplicate tab strip');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.native-input')).display"), 'none', 'Hide controls also hides VM input');
-    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), false, 'hiding resets VM input');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), true, 'hiding preserves VM input preference');
     assert.equal(await evaluate("document.querySelector('#toggle-controls').textContent"), 'Show controls');
     await settle('pushState(fixturePlayback)');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'updates keep controls hidden');

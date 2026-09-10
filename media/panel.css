@@ -230,5 +230,6 @@ progress::-webkit-progress-value { background: var(--focus) }
 .native-input label { display: inline-flex; align-items: center; gap: 5px; margin: 0 12px 0 0; white-space: nowrap }
 .native-input input { width: 14px; height: 14px; margin: 0; accent-color: var(--focus) }
 #native-status { color: var(--muted); overflow-wrap: anywhere }
-#native-pad { display: block; width: 100%; height: 64px; resize: none; margin-top: 6px; background: var(--bg); color: var(--text); border: 1px solid var(--focus); padding: 8px; font: inherit }
+#native-pad { position: absolute; inset: 0; display: block; width: 100%; height: 100%; resize: none; margin: 0; padding: 0; background: transparent; color: transparent; caret-color: transparent; border: 0; cursor: default; overflow: hidden }
+.code-scroll:has(#native-pad:not([hidden])) { overflow: hidden }
 #native-pad[hidden] { display: none }

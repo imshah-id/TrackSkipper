@@ -76,8 +76,8 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <nav id="tabs" class="tabs" aria-label="Recent files"><span class="tab empty-tab">Preview</span></nav>
 <div class="breadcrumbs"><span id="file-path">Git Replay</span><div class="editor-actions"><button id="follow" class="text-button" disabled>Follow playback</button><button id="toggle-controls" class="text-button" aria-expanded="true" aria-controls="transport playback-settings native-input" title="Hide playback controls (Escape to restore)"><span data-icon="settings"></span><span id="controls-label">Hide controls</span></button>${fullscreen}</div></div>
 <div id="empty" class="editor-empty"><p id="empty-message">Opening the first file…</p></div>
-<div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Read-only replay code" hidden><div id="code" class="code"></div></div>
-<div id="native-input" class="native-input"><label><input id="native-enabled" type="checkbox"> VM system input</label><span id="native-status" role="status">Off</span><textarea id="native-pad" aria-label="Git Replay native input field" readonly hidden spellcheck="false">Leave the pointer here, then click or press Enter to arm. Native A/Backspace and left clicks target this inert field. Escape stops input.</textarea></div>
+<div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Read-only replay code" hidden><div id="code" class="code"></div><textarea id="native-pad" aria-label="Read-only replay input surface. Click or press Enter to arm. Escape turns VM input off." readonly hidden spellcheck="false"></textarea></div>
+<div id="native-input" class="native-input"><label><input id="native-enabled" type="checkbox"> VM system input</label><span id="native-status" role="status">Off</span></div>
 <div class="editor-foot"><span id="commit-subject"></span><span id="phase"></span></div>
 </main>
 </div>

@@ -34,11 +34,11 @@ export function createNativeInput(script: string, python: string, notify: (statu
           const line = output.slice(0, newline); output = output.slice(newline + 1);
           try {
             const response = JSON.parse(line);
-            if (typeof response.error === 'string') { stop(response.error); return; }
+            if (typeof response.error === 'string') { stop(response.retry === true ? 'Waiting · return to the replay preview' : response.error); return; }
             if (!['ready', 'armed'].includes(response.status)) throw new Error();
             ready = true; armed = response.status === 'armed'; pending = false;
             if (timer) clearTimeout(timer); timer = undefined;
-            notify(armed ? 'Armed · Escape to stop' : 'Ready · keep focus in the input field');
+            notify(armed ? 'Armed · Escape to stop' : 'Ready · keep focus in the replay preview');
           } catch { stop('Invalid input helper response.'); return; }
         }
       });
