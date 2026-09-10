@@ -85,8 +85,35 @@ async function main() {
     const view = await evaluate(`({rows:document.querySelectorAll('.code-row').length,setupHidden:document.querySelector('#setup').hidden,syntax:document.querySelectorAll('.token-keyword').length,images:document.querySelectorAll('#code img').length,text:[...document.querySelectorAll('.line-content')].slice(0,17).map(node=>node.textContent),pointer:getComputedStyle(document.querySelector('#virtual-pointer')).pointerEvents,font:getComputedStyle(document.querySelector('#code')).fontSize,footerHeight:document.querySelector('.transport').getBoundingClientRect().height})`);
     assert.equal(view.rows, 120); assert.equal(view.setupHidden, true); assert.ok(view.syntax > 0); assert.equal(view.images, 0); assert.deepEqual(view.text, playback.frame.lines); assert.equal(view.pointer, 'none'); assert.equal(view.font, '14px'); assert.ok(view.footerHeight < 40);
     await screenshot('playback-desktop.png');
+    const dartPath = 'lib/features/dashboard/dashboard_shell.dart';
+    const dartLines = ['class DashboardPage extends StatelessWidget {', '  final String title = "Dashboard";', '  @override', '  Widget build(BuildContext context) => const SizedBox(height: 24);', '}'];
+    await settle(`pushState({...fixturePlayback,activePath:${JSON.stringify(dartPath)},files:[{offset:0,label:${JSON.stringify(dartPath)},change:'M'}],tabs:[{offset:0,label:${JSON.stringify(dartPath)}}],frame:{firstLine:0,lines:${JSON.stringify(dartLines)}}})`);
+    assert.ok(await evaluate("document.querySelectorAll('.token-declaration').length > 0"), 'Dart declarations are highlighted');
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.line-content')].slice(0,5).map(node=>node.textContent)"), dartLines);
+    assert.equal(await evaluate("document.querySelector('.file-name').textContent"), 'dashboard_shell.dart', 'filenames come before directory paths');
+    assert.equal(await evaluate("document.querySelector('.file-directory').textContent"), 'lib/features/dashboard');
+    await screenshot('playback-dart.png');
+    await settle('pushState(fixturePlayback)');
+    for (const theme of ['vscode-light', 'vscode-high-contrast', 'vscode-high-contrast-light']) {
+      await settle(`document.body.className=${JSON.stringify(theme)}`);
+      const colors = await evaluate("({background:getComputedStyle(document.body).backgroundColor,foreground:getComputedStyle(document.querySelector('.tab.selected')).color,outline:getComputedStyle(document.querySelector('.file-button.selected')).outlineStyle,scheme:getComputedStyle(document.body).colorScheme})");
+      assert.notEqual(colors.background, colors.foreground, 'active tabs stay readable');
+      if (theme.endsWith('light')) assert.equal(colors.scheme, 'light');
+      if (theme.includes('high-contrast')) assert.equal(colors.outline, 'solid');
+      await screenshot(`playback-${theme}.png`);
+    }
+    await settle("document.body.className='vscode-dark';document.documentElement.style.setProperty('--vscode-editor-background','#24283b');document.documentElement.style.setProperty('--vscode-editorGroupHeader-tabsBackground','#16161e')");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.editor')).backgroundColor"), 'rgb(36, 40, 59)', 'editor honors the active theme');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).backgroundColor"), 'rgb(22, 22, 30)', 'toolbar honors the active theme');
+    await settle("document.documentElement.style.removeProperty('--vscode-editor-background');document.documentElement.style.removeProperty('--vscode-editorGroupHeader-tabsBackground')");
     await settle("document.querySelector('#play').click();pushState({...fixturePlayback,status:'paused'});document.querySelector('#settings').click();document.querySelector('#typing').value='50';document.querySelector('#typing').dispatchEvent(new Event('change'))");
     assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'speed', sessionId: 'playing', charactersPerSecond: 50, pointerMultiplier: 1 });
+    assert.equal(await evaluate("document.querySelector('#play-label').textContent"), 'Resume');
+    await settle("document.querySelectorAll('.file-button')[1].focus();document.querySelectorAll('.file-button')[1].click()");
+    assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'browse', sessionId: 'playing', offset: 100 });
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    assert.equal(await evaluate("getComputedStyle(document.activeElement).outlineStyle"), 'solid', 'keyboard focus stays visible');
     await settle("document.querySelector('#code-scroll').dispatchEvent(new KeyboardEvent('keydown',{key:'PageDown',bubbles:true}))");
     assert.equal((await evaluate('commands.at(-1)')).firstLine, 58);
     await settle("pushState({...fixturePlayback,editor:{...fixturePlayback.editor,fontSize:16,lineHeight:1.5}})");
@@ -94,7 +121,9 @@ async function main() {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
     assert.equal(await evaluate("getComputedStyle(document.querySelector('#virtual-pointer')).display"), 'none');
     await send('Emulation.setDeviceMetricsOverride', { width: 520, height: 900, deviceScaleFactor: 1, mobile: false });
-    await settle("document.querySelector('#settings').click()"); await screenshot('playback-narrow.png');
+    await settle("document.querySelector('#settings').click()");
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'playback fits a narrow editor');
+    await screenshot('playback-narrow.png');
     await settle("pushState({});pushSetup(fixtureSetup)");
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
     await screenshot('setup-narrow.png');
@@ -104,7 +133,7 @@ async function main() {
     assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), true);
     assert.equal((await evaluate('commands.at(-1)')).type, 'repositoryBrowse');
     await screenshot('setup-empty.png');
-    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
+    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, dartHighlighting: true, filenameFirst: true, themeColors: true, highContrast: true, keyboardFocus: true, fileBrowsing: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
     await fs.writeFile(path.join(root, 'artifacts/browser-smoke.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
   } finally {
     socket?.close(); if (chrome?.pid) { chrome.kill('SIGTERM'); await new Promise(resolve => { chrome.once('exit', resolve); setTimeout(resolve, 2000).unref(); }); }

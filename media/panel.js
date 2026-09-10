@@ -14,8 +14,18 @@
   const icon = path => {
     const kind = path.split('.').pop().toLowerCase().replace(/x$/, ''), node = document.createElement('span');
     node.className = 'file-icon'; node.dataset.kind = kind; node.setAttribute('aria-hidden', 'true');
-    node.textContent = ({ ts: 'TS', js: 'JS', json: '{}', md: 'M↓', css: '#', py: 'Py', html: '◇' })[kind] || '◇'; return node;
+    const mark = ({ ts: 'TS', js: 'JS', json: '{}', md: 'M↓', css: '#', scss: '#', py: 'Py', html: '‹›', dart: 'D', yaml: 'Y', yml: 'Y' })[kind];
+    if (mark) node.textContent = mark;
+    else node.append(glyph('file'));
+    return node;
   };
+  function glyph(name) {
+    const paths = { file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), path = document.createElementNS(svg.namespaceURI, 'path');
+    svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('ui-icon');
+    path.setAttribute('d', paths[name] || paths.file); svg.append(path); return svg;
+  }
+  document.querySelectorAll('[data-icon]').forEach(node => node.append(glyph(node.dataset.icon)));
 
   function renderSelection() {
     $('selected-commit').textContent = selectedCommit ? `${selectedCommit.oid.slice(0, 7)}  ${selectedCommit.subject}` : 'Choose a starting commit';
@@ -74,7 +84,7 @@
   // ponytail: tokenize only the bounded visible window; use a full grammar engine if exact language/theme parity becomes necessary.
   function tokens(line, language, block) {
     if (language === 'md' && /^\s*#/.test(line)) return { parts: [[line, 'heading']], block: false };
-    if (!/^(ts|tsx|js|jsx|mjs|cjs|json|py|css|scss|c|cpp|h|java|go|rs|sh|rb|yaml|yml)$/.test(language)) return { parts: [[line, '']], block: false };
+    if (!/^(dart|ts|tsx|js|jsx|mjs|cjs|json|py|css|scss|c|cpp|h|java|go|rs|sh|rb|yaml|yml)$/.test(language)) return { parts: [[line, '']], block: false };
     const pattern = /\/\/.*|\/\*.*?\*\/|\/\*.*|(?:"(?:\\.|[^"\\])*"?|'(?:\\.|[^'\\])*'?|`(?:\\.|[^`\\])*`?)|\b(?:0x[\da-fA-F]+|\d+(?:\.\d+)?)\b|[A-Za-z_$][\w$]*|#[^\n]*|[^\w\s]/g;
     const parts = []; let end = 0;
     if (block) { const close = line.indexOf('*/'); end = close < 0 ? line.length : close + 2; parts.push([line.slice(0, end), 'comment']); block = close < 0; }
@@ -85,8 +95,8 @@
       if (value.startsWith('//') || value.startsWith('/*') || value[0] === '#' && /^(py|sh|rb|yaml|yml)$/.test(language)) { kind = 'comment'; if (value.startsWith('/*')) block = !value.endsWith('*/'); }
       else if (/^["'`]/.test(value)) kind = 'string';
       else if (/^\d/.test(value)) kind = 'number';
-      else if (/^(const|let|var|function|class|interface|type|enum|new|this|true|false|null|undefined|def|None|True|False|self|public|private|static|void|int|str|boolean|number|string)$/.test(value)) kind = 'declaration';
-      else if (/^(import|from|export|default|async|await|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|extends|implements|of|in|yield|as|with|raise|pass)$/.test(value)) kind = 'keyword';
+      else if (/^(const|let|var|function|class|interface|type|enum|new|this|true|false|null|undefined|def|None|True|False|self|public|private|static|void|int|str|boolean|number|string|final|late|required|factory|abstract|dynamic|double|bool|super|covariant)$/.test(value)) kind = 'declaration';
+      else if (/^(import|from|export|default|async|await|return|if|else|for|while|switch|case|break|continue|try|catch|finally|throw|extends|implements|of|in|yield|as|with|raise|pass|is|on|rethrow|assert|sync|part|library|show|hide|get|set)$/.test(value)) kind = 'keyword';
       else if (/^\s*\(/.test(line.slice(pattern.lastIndex))) kind = 'function';
       else if (/^[A-Z][A-Za-z]+/.test(value)) kind = 'type';
       parts.push([value, kind]); end = pattern.lastIndex;
@@ -172,26 +182,32 @@
     $('empty-message').textContent = state.status === 'complete' ? 'Replay complete. This range contains no animated text.' : 'Opening the first file…';
     $('new-replay').disabled = preparing || running;
     $('play').disabled = !state.configured || preparing || state.status === 'complete';
-    $('play').textContent = running ? 'Ⅱ Pause' : state.status === 'ready' ? '▶ Start' : '▶ Resume';
+    const playLabel = running ? 'Pause' : state.status === 'ready' ? 'Start' : 'Resume';
+    if ($('play-label').textContent !== playLabel) { $('play-icon').replaceChildren(glyph(running ? 'pause' : 'play')); $('play-label').textContent = playLabel; }
     $('stop').disabled = !state.configured || preparing || ['stopped', 'complete', 'ready'].includes(state.status);
     $('restart').disabled = $('clear').disabled = !state.configured || preparing || running;
     $('follow').disabled = !state.configured;
     $('elapsed').textContent = time(state.elapsedMs); $('total').textContent = time(state.totalMs);
     $('progress').value = state.totalMs ? Math.min(1, state.elapsedMs / state.totalMs) : 0;
     $('status').textContent = state.status || 'Ready'; $('status').dataset.status = state.status || 'ready';
-    $('workspace-name').textContent = (state.repository || 'Replay').toUpperCase();
+    $('workspace-name').textContent = state.repository || 'Replay';
+    $('files-hint').textContent = running ? 'Pause to browse files' : 'Select a file to inspect';
     $('file-path').textContent = state.activePath?.replaceAll('/', '  ›  ') || 'Git Replay'; $('file-path').title = state.activePath || '';
-    $('commit-subject').textContent = state.subject || 'Git Replay';
+    $('commit-subject').textContent = state.subject || 'Git Replay'; $('commit-subject').title = state.subject || '';
     $('phase').textContent = state.status === 'complete' ? 'Complete' : `Change ${state.recordNumber || 0} of ${state.recordCount || 0}`;
     $('file-count').textContent = String(state.files?.length || 0);
     const filesKey = JSON.stringify([state.files, state.activePath, running]);
     if (filesKey !== lastFiles) {
       lastFiles = filesKey;
       $('files').replaceChildren(...(state.files || []).map(file => {
-        const button = document.createElement('button'), tag = document.createElement('span'), name = document.createElement('span');
+        const button = document.createElement('button'), tag = document.createElement('span'), name = document.createElement('span'), directory = document.createElement('span');
         button.className = `file-button${file.label === state.activePath ? ' selected' : ''}`; button.title = file.label; button.disabled = running;
-        tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; name.className = 'file-name'; name.textContent = file.label;
-        button.append(icon(file.label), name, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); return button;
+        const change = ({ A: 'Added', D: 'Deleted', M: 'Modified', R: 'Renamed' })[file.change] || file.change;
+        button.setAttribute('aria-current', String(file.label === state.activePath)); button.setAttribute('aria-label', `${file.label}, ${change}`);
+        tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; tag.title = change;
+        name.className = 'file-name'; name.textContent = file.label.split('/').pop();
+        directory.className = 'file-directory'; directory.textContent = file.label.includes('/') ? file.label.slice(0, file.label.lastIndexOf('/')) : '';
+        button.append(icon(file.label), name, directory, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); return button;
       }));
     }
     const tabsKey = JSON.stringify([state.tabs, state.activePath, running]);
