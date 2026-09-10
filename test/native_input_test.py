@@ -47,11 +47,10 @@ class SafetyTest(unittest.TestCase):
 class MacFocusTest(unittest.TestCase):
     def backend(self):
         backend = module.Mac.__new__(module.Mac)
-        backend.system = 1
         backend.app = None
         backend.focus = None
         backend.true = 99
-        backend.attributes = {name: name for name in ('AXFocusedApplication', 'AXFocusedUIElement', 'AXManualAccessibility')}
+        backend.attributes = {name: name for name in ('AXFocusedUIElement', 'AXManualAccessibility')}
         backend.equal = lambda a, b: getattr(a, 'value', a) == getattr(b, 'value', b)
         backend.released = []
         backend.release = lambda value: backend.released.append(getattr(value, 'value', value))
@@ -59,12 +58,13 @@ class MacFocusTest(unittest.TestCase):
         backend.calls = []
         backend.enabled = False
         backend.current_app = 10
+        backend.frontmost_pid = lambda: backend.current_app
+        backend.create_app = lambda pid: pid
         backend.current_field = 20
         def copy(element, attribute, output):
             backend.calls.append((element, attribute))
             value = None
-            if element == 1 and attribute == 'AXFocusedApplication': value = backend.current_app
-            elif element == 10 and attribute == 'AXManualAccessibility': value = 99 if backend.enabled else 98
+            if element == 10 and attribute == 'AXManualAccessibility': value = 99 if backend.enabled else 98
             elif element == 10 and attribute == 'AXFocusedUIElement' and backend.enabled: value = backend.current_field
             if value is None: return -25212
             module.C.cast(output, module.C.POINTER(module.C.c_void_p))[0] = value
@@ -84,10 +84,17 @@ class MacFocusTest(unittest.TestCase):
         self.assertTrue(backend.enabled)
         self.assertEqual(backend.focused_element(), 20)
         self.assertIn((10, 'AXFocusedUIElement'), backend.calls)
-        self.assertNotIn((1, 'AXFocusedUIElement'), backend.calls)
+        self.assertFalse(any(name == 'AXFocusedApplication' for _, name in backend.calls), 'system-wide AX lookup is unavailable even when trusted')
         backend.current_app = 11
         with self.assertRaisesRegex(ValueError, 'application changed'):
             backend.focused_element()
+
+    def test_no_foreground_application_cannot_arm(self):
+        backend = self.backend()
+        backend.current_app = 0
+        with self.assertRaisesRegex(ValueError, 'foreground application'):
+            backend.prepare_accessibility()
+        self.assertEqual(backend.calls, [])
 
     def test_missing_focus_remains_an_error_with_the_ax_code(self):
         backend = self.backend()

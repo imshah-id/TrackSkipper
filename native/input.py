@@ -26,14 +26,23 @@ class Mac:
             _fields_ = [('x', C.c_double), ('y', C.c_double)]
         self.Point = Point
         self.release = bind(self.cf, 'CFRelease', None, C.c_void_p)
-        self.system = bind(self.cg, 'AXUIElementCreateSystemWide', C.c_void_p)()
+        # The system-wide AXFocusedApplication lookup can fail even for trusted clients.
+        # NSWorkspace identifies the foreground app; AX still verifies its focused field.
+        self.appkit = C.CDLL('/System/Library/Frameworks/AppKit.framework/AppKit')
+        objc = C.CDLL('/usr/lib/libobjc.A.dylib')
+        get_class = bind(objc, 'objc_getClass', C.c_void_p, C.c_char_p)
+        self.selector = bind(objc, 'sel_registerName', C.c_void_p, C.c_char_p)
+        self.message = C.CFUNCTYPE(C.c_void_p, C.c_void_p, C.c_void_p)(('objc_msgSend', objc))
+        self.pid_message = C.CFUNCTYPE(C.c_int, C.c_void_p, C.c_void_p)(('objc_msgSend', objc))
+        self.workspace = self.message(get_class(b'NSWorkspace'), self.selector(b'sharedWorkspace'))
+        self.pool_class = get_class(b'NSAutoreleasePool')
+        self.create_app = bind(self.cg, 'AXUIElementCreateApplication', C.c_void_p, C.c_int)
         string = bind(self.cf, 'CFStringCreateWithCString', C.c_void_p, C.c_void_p, C.c_char_p, C.c_uint32)
         self.attributes = {name: string(None, name.encode(), 0x08000100)
-                           for name in ('AXFocusedApplication', 'AXFocusedUIElement', 'AXManualAccessibility')}
+                           for name in ('AXFocusedUIElement', 'AXManualAccessibility')}
         self.true = C.c_void_p.in_dll(self.cf, 'kCFBooleanTrue').value
         self.set_attribute = bind(self.cg, 'AXUIElementSetAttributeValue', C.c_int, C.c_void_p, C.c_void_p, C.c_void_p)
         self.timeout = bind(self.cg, 'AXUIElementSetMessagingTimeout', C.c_int, C.c_void_p, C.c_float)
-        self.timeout(self.system, 0.2)
         self.copy = bind(self.cg, 'AXUIElementCopyAttributeValue', C.c_int, C.c_void_p, C.c_void_p, C.POINTER(C.c_void_p))
         self.equal = bind(self.cf, 'CFEqual', C.c_bool, C.c_void_p, C.c_void_p)
         self.focus = None
@@ -47,26 +56,36 @@ class Mac:
         self.post = bind(self.cg, 'CGEventPost', None, C.c_uint32, C.c_void_p)
         self.prepare_accessibility()
 
+    def frontmost_pid(self):
+        pool = self.message(self.pool_class, self.selector(b'new'))
+        try:
+            app = self.message(self.workspace, self.selector(b'frontmostApplication'))
+            return self.pid_message(app, self.selector(b'processIdentifier')) if app else 0
+        finally:
+            self.message(pool, self.selector(b'drain'))
+
     def read_attribute(self, element, name):
         value = C.c_void_p()
         error = self.copy(element, self.attributes[name], C.byref(value))
         if error or not value.value:
             if value.value: self.release(value)
-            raise ValueError(f'Cannot verify {name} (AX error {error}). '
-                             'Set VS Code Editor: Accessibility Support to on, then re-arm VM input.')
+            hint = ('macOS could not contact the app accessibility service. Check Accessibility permission '
+                    'for Visual Studio Code and the configured Python executable, restart the editor, then re-arm.'
+                    if error == -25204 else
+                    'Set VS Code Editor: Accessibility Support to on, then re-arm VM input.')
+            raise ValueError(f'Cannot verify {name} (AX error {error}). {hint}')
         return value.value
 
     def focused_element(self):
-        app = self.read_attribute(self.system, 'AXFocusedApplication')
-        try:
-            if not self.equal(self.app, app):
-                raise ValueError('Focused application changed; re-arm VM input.')
-            return self.read_attribute(app, 'AXFocusedUIElement')
-        finally:
-            self.release(app)
+        if self.frontmost_pid() != self.app_pid:
+            raise ValueError('Focused application changed; re-arm VM input.')
+        return self.read_attribute(self.app, 'AXFocusedUIElement')
 
     def prepare_accessibility(self):
-        self.app = self.read_attribute(self.system, 'AXFocusedApplication')
+        self.app_pid = self.frontmost_pid()
+        if self.app_pid <= 0: raise ValueError('Cannot verify the foreground application. Unlock the VM desktop and re-arm.')
+        self.app = self.create_app(self.app_pid)
+        if not self.app: raise ValueError('Cannot create the application accessibility object.')
         self.timeout(self.app, 0.2)
         # Electron does not expose its webview tree until an accessibility client requests it.
         value = C.c_void_p()
