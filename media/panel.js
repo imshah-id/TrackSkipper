@@ -2,6 +2,7 @@
   'use strict';
   const api = acquireVsCodeApi(), $ = id => document.getElementById(id);
   const draft = api.getState() || {};
+  const inSidebar = document.body.dataset.sidebar === 'true';
   let sessionId = document.body.dataset.session, state = {}, setup = { loading: true, repositories: [], commits: [] };
   let selectedCommit = draft.selectedCommit || null, selectionKey = draft.selectionKey || '', timingMode = 'duration', editingSetup = !!draft.editingSetup;
   let controlsHidden = !!draft.controlsHidden;
@@ -85,10 +86,11 @@
     $('selected-commit').textContent = selectedCommit ? `${selectedCommit.oid.slice(0, 7)}  ${selectedCommit.subject}` : 'Choose a starting commit';
     $('end-commit').textContent = setup.endOid?.slice(0, 7) || '—';
     $('selection-hint').textContent = selectedCommit ? (selectedCommit.oid === setup.endOid ? 'Replay the latest commit.' : 'Replay the selected commit and every commit after it.') : 'Choose a repository and a starting commit.';
-    const busy = setup.loading || state.status === 'preparing';
+    const busy = setup.loading || state.status === 'preparing' || state.status === 'running';
     $('start-replay').disabled = busy || !setup.commits.length || !selectedCommit || !setup.selectedRepositoryId || !setup.endOid;
-    $('start-replay').textContent = state.status === 'preparing' ? 'Preparing…' : 'Start replay';
+    $('start-replay').textContent = state.status === 'preparing' ? 'Preparing…' : state.status === 'running' ? 'Replay running' : 'Start replay';
     $('cancel-prepare').hidden = state.status !== 'preparing' || !state.canCancelPreparation;
+    $('back').textContent = inSidebar ? 'Open playback' : 'Back to playback';
     $('back').hidden = !state.configured; $('back').disabled = state.status === 'preparing';
     $('setup-error').textContent = setup.error || ''; $('setup-error').hidden = !setup.error;
   }
@@ -289,7 +291,7 @@
     nativeStatus();
     const running = state.status === 'running', preparing = state.status === 'preparing';
     if (running && editingSetup) { editingSetup = false; saveDraft(); }
-    const showingSetup = !state.configured || editingSetup;
+    const showingSetup = inSidebar || !state.configured || editingSetup;
     $('setup').hidden = !showingSetup; $('playback').hidden = showingSetup;
     const showNotice = state.isError || preparing || state.status === 'complete';
     $('notice').textContent = state.notice || ''; $('notice').hidden = !showNotice || !state.notice; $('notice').classList.toggle('error', !!state.isError);
@@ -390,8 +392,8 @@
     send('prepare', { repositoryId: setup.selectedRepositoryId, startOid: selectedCommit.oid, endOid: setup.endOid, timing });
   });
   $('cancel-prepare').addEventListener('click', () => send('stop'));
-  $('new-replay').addEventListener('click', () => { editingSetup = true; render(); renderSetup(); });
-  $('back').addEventListener('click', () => { editingSetup = false; saveDraft(); render(); });
+  $('new-replay').addEventListener('click', () => send('configure'));
+  $('back').addEventListener('click', () => { if (inSidebar) send('showPlayback'); else { editingSetup = false; saveDraft(); render(); } });
   $('settings').addEventListener('click', () => { $('playback-settings').hidden = !$('playback-settings').hidden; $('settings').setAttribute('aria-expanded', String(!$('playback-settings').hidden)); });
   $('toggle-controls').addEventListener('click', () => { suspendNative(); controlsHidden = !controlsHidden; renderControls(); if (nativeRequested) $('native-pad').focus({ preventScroll: true }); saveDraft(); phaseKey = ''; pointer(); });
   document.addEventListener('keydown', event => {

@@ -34,17 +34,17 @@ export function validCommand(value: unknown, sessionId: string): value is PanelC
   } else if (input.type === 'viewport' || input.type === 'browse' || input.type === 'closeTab') {
     const key = input.type === 'viewport' ? 'firstLine' : 'offset'; keys.push(key);
     if (!Number.isSafeInteger(input[key]) || (input[key] as number) < 0) return false;
-  } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow', 'fullscreen'].includes(input.type)) return false;
+  } else if (!['ready', 'showPlayback', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow', 'fullscreen'].includes(input.type)) return false;
   return Object.keys(input).every(key => keys.includes(key));
 }
 
-export function panelHtml(options: { script: string; style: string; cspSource: string; nonce: string; sessionId: string }): string {
+export function panelHtml(options: { script: string; style: string; cspSource: string; nonce: string; sessionId: string; sidebar?: boolean }): string {
   const attr = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
   const fullscreen = '<button type="button" data-fullscreen class="text-button" aria-label="Toggle VS Code full screen" title="Toggle VS Code full screen. Keeps your sidebar and top bar layout; click again to exit."><span data-icon="fullscreen"></span><span class="fullscreen-label">Full screen</span></button>';
   return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${attr(options.cspSource)}; script-src 'nonce-${attr(options.nonce)}';">
 <title>Git Replay</title><link rel="stylesheet" href="${attr(options.style)}"></head>
-<body data-session="${attr(options.sessionId)}">
+<body data-session="${attr(options.sessionId)}" data-sidebar="${!!options.sidebar}">
 <div id="notice" class="notice" role="status" hidden></div>
 <main id="setup" class="setup">
 <div class="setup-content">

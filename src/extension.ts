@@ -15,6 +15,8 @@ import { createNativeInput } from './input';
 let shutdown: (() => Promise<void>) | undefined;
 export function activate(context: vscode.ExtensionContext): void {
   const storageRoot = path.join(context.globalStorageUri.fsPath, 'sessions');
+  let sidebar: vscode.WebviewView | undefined;
+  let sessionLoading: Promise<void> | undefined;
   let panel: vscode.WebviewPanel | undefined, store: Store | undefined, plan: Plan | undefined;
   let replay: ReturnType<typeof createReplay> | undefined, recovery: Checkpoint | null = null;
   let preparation: AbortController | undefined, busy = false, error = '', notice = '';
@@ -64,26 +66,31 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   function send(force = false): void {
-    if (!panel?.visible) return;
+    if (!panel?.visible && !sidebar?.visible) return;
     const wait = 100 - (performance.now() - lastPost);
     if (!force && wait > 0) { if (!postTimer) postTimer = setTimeout(() => { postTimer = undefined; send(); }, wait); return; }
     if (postTimer) clearTimeout(postTimer); postTimer = undefined; lastPost = performance.now();
     const state = replay?.getState();
     const title = activePath ? path.posix.basename(activePath) : 'Replay';
-    if (panel.title !== title) panel.title = title;
+    if (panel && panel.title !== title) panel.title = title;
     const status = busy ? 'preparing' : error ? 'error' : state?.status ?? (recovery?.status === 'complete' ? 'complete' : recovery ? 'paused' : 'ready');
-    void panel.webview.postMessage({ type: 'state', sessionId: sessionId(), status, notice: error || notice, isError: !!error, canCancelPreparation: !!preparation,
+    const message = { type: 'state', sessionId: sessionId(), status, notice: error || notice, isError: !!error, canCancelPreparation: !!preparation,
       configured: !!plan, repository: plan ? path.basename(plan.repo) : '', start: plan?.startOid, end: plan?.endOid,
       timing: state?.timing ?? recovery?.timing ?? plan?.timing, totalMs: state?.totalMs ?? (plan?.timing.mode === 'duration' ? plan.timing.durationMs : plan?.totals.preferredMs ?? 0),
       elapsedMs: state?.position.playbackElapsedMs ?? recovery?.pausedPosition?.playbackElapsedMs ?? recovery?.playbackElapsedMs ?? 0,
       summary: plan?.summary, recordNumber: (state?.record?.ordinal ?? -1) + 1, recordCount: plan?.totals.records ?? 0,
       nativeStatus, subject: state?.record?.subject ?? '', frame, phase, phaseElapsedMs, phaseDurationMs,
-      files: repositoryFiles.map(({ pathBase64, label, change }) => ({ pathBase64, label, change })), tabs: recent, activePath, editor });
+      files: repositoryFiles.map(({ pathBase64, label, change }) => ({ pathBase64, label, change })), tabs: recent, activePath, editor };
+    if (panel?.visible) void panel.webview.postMessage(message);
+    if (sidebar?.visible) {
+      const { files, tabs, frame, editor, phase, ...summary } = message;
+      void sidebar.webview.postMessage(summary);
+    }
   }
-  function report(cause: unknown): void { error = cause instanceof Error ? cause.message : String(cause); if (!panel) void vscode.window.showErrorMessage(error); send(true); }
+  function report(cause: unknown): void { error = cause instanceof Error ? cause.message : String(cause); if (!panel && !sidebar) void vscode.window.showErrorMessage(error); send(true); }
 
   function sendSetup(): void {
-    if (panel?.visible) void panel.webview.postMessage({ type: 'setup', sessionId: sessionId(), setup });
+    for (const view of [panel, sidebar]) if (view?.visible) void view.webview.postMessage({ type: 'setup', sessionId: sessionId(), setup });
   }
 
   async function setupAction(action: () => Promise<void>): Promise<void> {
@@ -239,6 +246,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await context.globalState.update('sessionRoot', store.root);
       recovery = null; frame = undefined; recent = []; repositoryFiles = []; currentCommit = ''; activePath = ''; browseView = undefined;
       notice = `${plan.summary?.commits} commits · ${plan.summary?.animated} animated files · ${plan.summary?.snapshots} snapshot events.`;
+      await showPlayback();
       attachReplay(); await replay!.start();
     } catch (cause) { await candidateStore?.clear(); throw cause; }
     finally { preparation = undefined; busy = false; send(true); }
@@ -252,7 +260,9 @@ export function activate(context: vscode.ExtensionContext): void {
       if (!discovered) await setupAction(discover); else sendSetup();
       return;
     }
-    if (command.type === 'configure' || command.type === 'discover') { await setupAction(discover); return; }
+    if (command.type === 'showPlayback') { await showPlayback(); send(true); return; }
+    if (command.type === 'configure') { await vscode.commands.executeCommand('gitReplay.launcher.focus'); return; }
+    if (command.type === 'discover') { await setupAction(discover); return; }
     if (command.type === 'repository') { await setupAction(() => selectRepository(command.repositoryId!)); return; }
     if (command.type === 'repositoryBrowse') { await setupAction(browseRepository); return; }
     if (command.type === 'commits') { await setupAction(() => loadCommits(command.cursor!)); return; }
@@ -334,30 +344,33 @@ export function activate(context: vscode.ExtensionContext): void {
     send(true);
   }
 
-  async function openPanel(): Promise<void> {
-    repositoryHint = vscode.window.activeTextEditor?.document.uri ?? repositoryHint;
-    if (panel) { panel.reveal(); return; }
-    if (!vscode.workspace.isTrusted || vscode.env.remoteName) throw new Error('Git Replay needs a trusted local workspace.');
-    if (!plan) {
-      const saved = context.globalState.get<string>('sessionRoot');
-      if (saved) try {
-        store = await openStore(storageRoot, saved, quota());
-        const manifestPath = path.join(store.root, 'manifest.json');
-        if ((await stat(manifestPath)).size > 1024 * 1024) throw new Error('Session manifest is too large');
-        const candidate = JSON.parse(await readFile(manifestPath, 'utf8')) as Plan;
-        validateTiming(candidate.timing);
-        if (candidate.version !== 1 || candidate.root !== store.root || candidate.id !== path.basename(store.root) || !path.isAbsolute(candidate.repo)) throw new Error('Invalid saved session');
-        plan = candidate; recovery = await store.readCheckpoint(); notice = 'Saved session loaded. Resume or restart when ready.';
-      } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
-    }
-    panel = vscode.window.createWebviewPanel('gitReplay', 'Replay', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
-    replay?.setVisible(panel.visible);
-    const webview = panel.webview;
-    webview.html = panelHtml({ script: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js')).toString(), style: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css')).toString(), cspSource: webview.cspSource, nonce: randomBytes(16).toString('hex'), sessionId: sessionId() });
-    panel.onDidChangeViewState(event => { if (!event.webviewPanel.active || !event.webviewPanel.visible) native.stop(); replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) { send(true); sendSetup(); } });
-    panel.onDidDispose(() => { native.stop(); panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
+  function restoreSession(): Promise<void> {
+    sessionLoading ??= (async () => {
+      if (!plan) {
+        const saved = context.globalState.get<string>('sessionRoot');
+        if (saved) try {
+          store = await openStore(storageRoot, saved, quota());
+          const manifestPath = path.join(store.root, 'manifest.json');
+          if ((await stat(manifestPath)).size > 1024 * 1024) throw new Error('Session manifest is too large');
+          const candidate = JSON.parse(await readFile(manifestPath, 'utf8')) as Plan;
+          validateTiming(candidate.timing);
+          if (candidate.version !== 1 || candidate.root !== store.root || candidate.id !== path.basename(store.root) || !path.isAbsolute(candidate.repo)) throw new Error('Invalid saved session');
+          plan = candidate; recovery = await store.readCheckpoint(); notice = 'Saved session loaded. Resume or restart when ready.';
+        } catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+      }
+    })();
+    return sessionLoading;
+  }
+  function showPlayback(): Promise<void> {
+    opening ??= openPanel().finally(() => { opening = undefined; });
+    return opening;
+  }
+  function initializeWebview(webview: vscode.Webview, inSidebar = false): void {
+    webview.options = { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] };
+    webview.html = panelHtml({ script: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js')).toString(), style: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css')).toString(), cspSource: webview.cspSource, nonce: randomBytes(16).toString('hex'), sessionId: sessionId(), sidebar: inSidebar });
     webview.onDidReceiveMessage((value: unknown) => {
       if (!validCommand(value, sessionId())) return;
+      if (inSidebar && !['ready', 'discover', 'repository', 'repositoryBrowse', 'commits', 'prepare', 'stop', 'showPlayback'].includes(value.type)) return;
       if (value.type === 'nativeInput') {
         if (value.action === 'stop') { native.stop(); return; }
         if (!panel?.active || !panel.visible || !vscode.window.state.focused || !vscode.workspace.isTrusted
@@ -372,18 +385,33 @@ export function activate(context: vscode.ExtensionContext): void {
       commands = commands.then(() => handle(value)).catch(report);
     });
   }
-  context.subscriptions.push(vscode.commands.registerCommand('gitReplay.open', () => {
-    opening ??= openPanel().catch(report).finally(() => { opening = undefined; });
-    return opening;
-  }));
-  context.subscriptions.push(vscode.window.registerTreeDataProvider<vscode.TreeItem>('gitReplay.launcher', {
-    getTreeItem: item => item,
-    getChildren: () => [],
-  }));
+  async function openPanel(): Promise<void> {
+    repositoryHint = vscode.window.activeTextEditor?.document.uri ?? repositoryHint;
+    if (panel) { panel.reveal(); return; }
+    if (!vscode.workspace.isTrusted || vscode.env.remoteName) throw new Error('Git Replay needs a trusted local workspace.');
+    await restoreSession();
+    panel = vscode.window.createWebviewPanel('gitReplay', 'Replay', vscode.ViewColumn.Active, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
+    replay?.setVisible(panel.visible);
+    initializeWebview(panel.webview);
+    panel.onDidChangeViewState(event => { if (!event.webviewPanel.active || !event.webviewPanel.visible) native.stop(); replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) { send(true); sendSetup(); } });
+    panel.onDidDispose(() => { native.stop(); panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
+  }
+  context.subscriptions.push(vscode.commands.registerCommand('gitReplay.open', () => vscode.commands.executeCommand('gitReplay.launcher.focus')));
+  context.subscriptions.push(vscode.commands.registerCommand('gitReplay.showReplay', () => showPlayback().catch(report)));
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider('gitReplay.launcher', {
+    async resolveWebviewView(view) {
+      repositoryHint = vscode.window.activeTextEditor?.document.uri ?? repositoryHint;
+      sidebar = view;
+      await restoreSession();
+      initializeWebview(view.webview, true);
+      view.onDidChangeVisibility(() => { if (view.visible) { send(true); sendSetup(); } });
+      view.onDidDispose(() => { if (sidebar === view) sidebar = undefined; });
+    },
+  }, { webviewOptions: { retainContextWhenHidden: true } }));
   context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (!state.focused) native.stop(); }));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
     discovered = false;
-    if (panel) commands = commands.then(() => setupAction(discover)).catch(report);
+    if (panel || sidebar) commands = commands.then(() => setupAction(discover)).catch(report);
   }));
   context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
     if (event.affectsConfiguration('editor')) { editor = editorSettings(); send(true); }

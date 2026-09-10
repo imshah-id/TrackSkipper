@@ -22,8 +22,8 @@ function host(options = {}) {
     stores.push(store); return store;
   };
   const oldStore = makeStore(savedPlan), newStore = makeStore(replacementPlan);
-  let open, warningGate, workspaceChange, configurationChange, windowChange;
-  const nativeCalls = [];
+  let open, sidebarProvider, warningGate, workspaceChange, configurationChange, windowChange;
+  const nativeCalls = [], registeredCommands = new Map();
   const gitCalls = [], preparations = [], savedRoots = [], executedCommands = [];
   const roots = options.roots ?? { '/repo': '/repo' };
   const vscode = {
@@ -34,12 +34,13 @@ function host(options = {}) {
     extensions: { getExtension: () => options.gitRepositories ? { isActive: true, exports: { getAPI: () => ({ repositories: options.gitRepositories.map(fsPath => ({ rootUri: { scheme: 'file', fsPath } })) }) } } : undefined },
     Uri: { joinPath: (uri, ...parts) => ({ fsPath: path.join(uri.fsPath, ...parts), toString() { return this.fsPath; } }) },
     ViewColumn: { Active: 1 }, ProgressLocation: { Notification: 1 },
-    commands: { registerCommand: (_, callback) => { open = callback; return { dispose() {} }; }, executeCommand: async name => { executedCommands.push(name); } },
+    commands: { registerCommand: (name, callback) => { registeredCommands.set(name, callback); if (name === 'gitReplay.showReplay' || !open) open = callback; return { dispose() {} }; }, executeCommand: async name => { executedCommands.push(name); } },
     window: {
       state: { focused: true },
       onDidChangeWindowState: callback => { windowChange = callback; return { dispose() {} }; },
       activeTextEditor: options.activeFile ? { document: { uri: { scheme: 'file', fsPath: options.activeFile } } } : undefined,
       registerTreeDataProvider: () => ({ dispose() {} }),
+      registerWebviewViewProvider: (_, provider) => { sidebarProvider = provider; return { dispose() {} }; },
       showErrorMessage: async () => {}, showWarningMessage: async () => warningGate ? await warningGate() : 'Replace session',
       showOpenDialog: async () => options.browse ? [{ scheme: 'file', fsPath: options.browse }] : undefined,
       withProgress: async (_, callback) => callback({ report() {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
@@ -126,6 +127,13 @@ function host(options = {}) {
     return message.setup;
   };
   return { panels, controllers, stores, nativeCalls,
+    openSidebar: async () => {
+      await registeredCommands.get('gitReplay.open')();
+      const view = { visible: true, messages: [], onDidDispose(callback) { this.close = callback; }, onDidChangeVisibility(callback) { this.change = callback; },
+        webview: { cspSource: 'local', asWebviewUri: uri => uri, onDidReceiveMessage(callback) { view.receive = callback; }, postMessage(message) { view.messages.push(structuredClone(message)); return Promise.resolve(true); } } };
+      await sidebarProvider.resolveWebviewView(view);
+      return view;
+    },
     windowFocus: focused => { vscode.window.state.focused = focused; windowChange({ focused }); }, gitCalls, preparations, savedRoots, executedCommands, open: () => open(), send, setup,
     state: () => panels.at(-1).messages.filter(message => message.type === 'state').at(-1),
     prepare: async () => { const current = setup();
@@ -514,5 +522,32 @@ test('closing tabs selects a neighbor, closing the last clears the preview, and 
     assert.equal(app.state().tabs.length, 1);
     await app.send('resume'); await app.send('closeTab', { offset: 0 });
     assert.equal(app.state().tabs.length, 1, 'tab closing waits until playback is paused');
+  } finally { await app.dispose(); }
+});
+
+
+test('activity bar opens setup in the sidebar and preparation opens only the playback editor', async () => {
+  const app = host({ saved: false });
+  try {
+    const sidebar = await app.openSidebar();
+    assert.ok(app.executedCommands.includes('gitReplay.launcher.focus'));
+    assert.equal(app.panels.length, 0, 'opening setup does not create an editor tab');
+    assert.match(sidebar.webview.html, /data-sidebar="true"/);
+    const send = async (type, values = {}, sessionId = 'idle') => {
+      sidebar.receive({ type, sessionId, ...values });
+      for (let i = 0; i < 20; i++) await settle();
+    };
+    await send('ready');
+    const setup = sidebar.messages.filter(message => message.type === 'setup').at(-1).setup;
+    assert.equal(setup.repositories.length, 1);
+    await send('prepare', { repositoryId: setup.selectedRepositoryId, startOid: setup.commits[0].oid, endOid: setup.endOid, timing: { mode: 'speed', charactersPerSecond: 24, pointerMultiplier: 1 } });
+    assert.equal(app.panels.length, 1);
+    const state = sidebar.messages.filter(message => message.type === 'state').at(-1);
+    assert.equal(state.status, 'running');
+    assert.equal(state.files, undefined, 'sidebar receives no code or file-tree payload');
+    await send('nativeInput', { action: 'arm', at: Date.now() }, 'session-two');
+    assert.equal(app.nativeCalls.includes('arm'), false, 'only the playback webview can request native input');
+    sidebar.visible = false; sidebar.change();
+    assert.equal(app.controllers[0].visible, true, 'switching sidebar views keeps playback visible');
   } finally { await app.dispose(); }
 });

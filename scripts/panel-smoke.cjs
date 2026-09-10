@@ -26,9 +26,9 @@ async function main() {
   let chrome, socket;
   const server = http.createServer(async (request, response) => {
     try {
-      if (request.url === '/') {
+      if (request.url === '/' || request.url === '/sidebar') {
         const source = `http://127.0.0.1:${server.address().port}`;
-        let html = panelHtml({ script: '/panel.js', style: '/panel.css', cspSource: source, nonce: 'preview', sessionId: 'idle' });
+        let html = panelHtml({ script: '/panel.js', style: '/panel.css', cspSource: source, nonce: 'preview', sessionId: 'idle', sidebar: request.url === '/sidebar' });
         html = html.replace('<link rel="stylesheet"', '<link rel="stylesheet" href="/host.css"><link rel="stylesheet"');
         const bootstrap = `window.previewBoot=Math.random();window.commands=[];window.fixtureSetup=${JSON.stringify(setup)};window.fixturePlayback=${JSON.stringify(playback)};window.pushState=(state)=>window.postMessage({type:'state',sessionId:'idle',configured:false,status:'ready',...state},'*');window.pushSetup=(setup,sessionId='idle')=>window.postMessage({type:'setup',sessionId,setup},'*');window.acquireVsCodeApi=()=>({getState:()=>JSON.parse(sessionStorage.getItem('draft')||'null'),setState:state=>sessionStorage.setItem('draft',JSON.stringify(state)),postMessage(message){window.commands.push(message);if(message.type==='ready'){pushState({});pushSetup(fixtureSetup);}}});`;
         html = html.replace('<script nonce="preview" src=', `<script nonce="preview">${bootstrap.replaceAll('<', '\\u003c')}</script><script nonce="preview" src=`);
@@ -265,6 +265,24 @@ async function main() {
     await settle("pushState({});pushSetup(fixtureSetup)");
     assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true);
     await screenshot('setup-narrow.png');
+    await send('Emulation.setDeviceMetricsOverride', { width: 300, height: 850, deviceScaleFactor: 1, mobile: false });
+    await send('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/sidebar` });
+    for (let i = 0; i < 100; i++) { if (await evaluate("document.querySelector('#repository')?.value==='repo-one'")) break; await new Promise(resolve => setTimeout(resolve, 50)); }
+    assert.equal(await evaluate("document.body.dataset.sidebar"), 'true');
+    assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'setup fits the 300px sidebar');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('#setup [data-fullscreen]')).display"), 'none');
+    await screenshot('setup-sidebar.png');
+    await settle('pushState(fixturePlayback)');
+    assert.equal(await evaluate("document.querySelector('#setup').hidden"), false, 'sidebar remains setup while the editor plays');
+    assert.equal(await evaluate("document.querySelector('#playback').hidden"), true);
+    assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), true, 'running replay cannot be replaced from the sidebar');
+    await settle("document.querySelector('#back').click()");
+    assert.equal(await evaluate("commands.at(-1).type"), 'showPlayback');
+    await settle("pushState({...fixturePlayback,status:'paused'})");
+    await settle("document.querySelector('#commit-search').value='';document.querySelector('#commit-search').dispatchEvent(new Event('input'));document.querySelectorAll('.commit-option input')[1].click();document.querySelector('#start-replay').click()");
+    assert.equal(await evaluate("commands.at(-1).type"), 'prepare', 'sidebar starts the selected replay');
+    await settle('pushState({});pushSetup(fixtureSetup)');
+
     await settle("document.querySelector('#repository').value='repo-two';document.querySelector('#repository').dispatchEvent(new Event('change'))");
     assert.equal((await evaluate('commands.at(-1)')).repositoryId, 'repo-two');
     await settle("pushSetup({loading:false,repositories:[],commits:[],selectedRepositoryId:null,endOid:null,nextCursor:null,error:'No Git repository found. Browse for a repository folder.'});document.querySelector('#browse-repository').click()");

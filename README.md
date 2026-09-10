@@ -7,11 +7,11 @@ Replay an inclusive range of Git commits in an isolated VS Code panel. Code appe
 Requires desktop VS Code **1.137 or later**, a trusted local Git workspace, and Git 2.45+. Tested on macOS Apple Silicon; Windows/Linux and remote workspaces are not validated. Remote and virtual workspaces are disabled.
 
 1. In VS Code, run **Extensions: Install from VSIX…** and select `trackskipper.vsix`.
-2. Open a local Git repository, click the **Git Replay** icon in the left Activity Bar, then **Open Git Replay**. You can also run **Git Replay: Open** from the Command Palette.
+2. Open a local Git repository, click the **Git Replay** icon in the left Activity Bar. The setup form opens directly in the sidebar. You can also run **Git Replay: Open** from the Command Palette.
 3. Your open repository is detected automatically. Use the repository dropdown or **Browse…** to choose another folder. Select a starting commit and a duration (for example, `6` hours) or typing speed.
 4. Select **Start replay**. Preparation flows directly into playback. Use Pause, Resume, Stop, Restart or Clear session as needed.
 
-Commit search filters the loaded page of up to 100 commits; **Older** loads the next page, and **Latest** returns to the newest page. Your selection and timing survive switching editor tabs. **Refresh** redetects repositories and pins the latest HEAD. Pause playback and choose **＋** in its Explorer to configure another replay.
+Commit search filters the loaded page of up to 100 commits; **Older** loads the next page, and **Latest** returns to the newest page. Your selection and timing survive switching editor tabs. **Refresh** redetects repositories and pins the latest HEAD. Start replay to open the code preview in an editor tab. The sidebar keeps your setup choices; **Open playback** returns to an existing preview. Pause playback and choose **＋** in its Explorer to return to sidebar setup.
 
 The start commit is included. The ending commit is pinned to HEAD when the repository is selected or refreshed; later commits do not change a prepared session. Replay follows first-parent history, oldest to newest. Merges appear once against their first parent; renames appear as deletion/addition; empty commits appear as milestones.
 
@@ -81,6 +81,6 @@ For 10× the commits, preparation took 10.13× as long and retained heap grew by
 
 Extension-owned working memory includes the active text, edit record, viewport and current repository tree (Git tree output is capped at 8 MiB); history and output grow on disk. Preparation reads every selected change and invokes Git's diff, whose cost depends on the contents. Saves stream each changed target blob. Changing speed rescans the remaining plan to estimate its duration without retaining it in memory.
 
-Validation: **49 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness selected a discovered repository and submitted the inline preparation command. Chromium checks verified inline setup and paging, form persistence, corrected retries, syntax rendering without interpreting source as HTML, 120 row nodes, editor typography, narrow layouts, and reduced motion.
+Validation: **50 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness selected a discovered repository and submitted the inline preparation command. Chromium checks verified inline setup and paging, form persistence, corrected retries, syntax rendering without interpreting source as HTML, 120 row nodes, editor typography, narrow layouts, and reduced motion.
 
 A manual session while using another app, Windows/Linux compatibility, real six-hour reliability, and measured UI/pointer frequencies and pause/stop p95 latency remain unverified. The frequency limits above are implementation caps, not measured real-time guarantees.

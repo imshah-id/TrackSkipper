@@ -64,22 +64,8 @@
         {
           "id": "gitReplay.launcher",
           "name": "Git Replay",
-          "icon": "media/activity-bar.svg"
-        }
-      ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "gitReplay.launcher",
-        "contents": "Replay committed changes in an isolated workspace.\n[Open Git Replay](command:gitReplay.open)"
-      }
-    ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "gitReplay.open",
-          "when": "view == gitReplay.launcher",
-          "group": "navigation"
+          "icon": "media/activity-bar.svg",
+          "type": "webview"
         }
       ]
     }
