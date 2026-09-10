@@ -30,6 +30,7 @@
   document.querySelectorAll('[data-fullscreen]').forEach(button => button.addEventListener('click', () => send('fullscreen')));
 
   function renderControls() {
+    if (controlsHidden) stopNative();
     $('playback').classList.toggle('controls-hidden', controlsHidden);
     $('controls-label').textContent = controlsHidden ? 'Show controls' : 'Hide controls';
     $('toggle-controls').setAttribute('aria-label', $('controls-label').textContent);

@@ -157,10 +157,12 @@ async function main() {
     await settle("document.querySelector('.folder[data-path=\"test\"] summary').click();pushState({...fixturePlayback,status:'paused',activePath:'test/session.test.ts'})");
     assert.equal(await evaluate("document.querySelector('.folder[data-path=\"test\"]').open"), true, 'a newly active file reveals its folder');
     await settle('pushState(fixturePlayback)');
-    await settle("document.querySelector('#settings').click();document.querySelector('#toggle-controls').click()");
+    await settle("document.querySelector('#native-enabled').click();document.querySelector('#settings').click();document.querySelector('#toggle-controls').click()");
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('#playback-settings')).display"), 'none');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.tabs')).display"), 'none', 'hidden controls remove the duplicate tab strip');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.native-input')).display"), 'none', 'Hide controls also hides VM input');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), false, 'hiding resets VM input');
     assert.equal(await evaluate("document.querySelector('#toggle-controls').textContent"), 'Show controls');
     await settle('pushState(fixturePlayback)');
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'updates keep controls hidden');
@@ -180,6 +182,8 @@ async function main() {
     assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'fullscreen', sessionId: 'playing' });
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Escape restores controls');
+    assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.native-input')).display"), 'none', 'Escape restores VM input controls');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), false, 'restoring controls does not re-arm input');
     await settle("document.querySelector('#toggle-controls').click();document.querySelector('#toggle-controls').click()");
     assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Show controls restores the toolbar');
     await settle("document.querySelector('#settings').click()");

@@ -141,7 +141,7 @@ body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
 .breadcrumbs button { font-size: 11px; padding: 3px 5px }
 .editor-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex: none }
 #toggle-controls { flex: none }
-.controls-hidden :is(.tabs, .transport, .playback-settings, .editor-foot, .file-pager, .clear-session, .files-hint, #follow, #new-replay) { display: none !important }
+.controls-hidden :is(.tabs, .transport, .native-input, .playback-settings, .editor-foot, .file-pager, .clear-session, .files-hint, #follow, #new-replay) { display: none !important }
 .controls-hidden .explorer-heading { height: 24px }
 .controls-hidden :is(#controls-label, .fullscreen-label) { display: none }
 .controls-hidden .editor-actions button { width: 24px; height: 22px; min-height: 0; padding: 3px }
