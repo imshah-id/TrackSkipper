@@ -91,9 +91,36 @@ async function main() {
     assert.ok(await evaluate("document.querySelectorAll('.token-declaration').length > 0"), 'Dart declarations are highlighted');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.line-content')].slice(0,5).map(node=>node.textContent)"), dartLines);
     assert.equal(await evaluate("document.querySelector('.file-name').textContent"), 'dashboard_shell.dart', 'filenames come before directory paths');
-    assert.equal(await evaluate("document.querySelector('.file-directory').textContent"), 'lib/features/dashboard');
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('.folder-name')].map(node=>node.textContent)"), ['lib', 'features', 'dashboard']);
     await screenshot('playback-dart.png');
+    await settle("document.querySelector('.folder summary').click()");
+    assert.equal(await evaluate("document.querySelector('.folder').open"), false, 'folders collapse');
+    await settle("pushState({...fixturePlayback,activePath:'lib/features/dashboard/dashboard_shell.dart',files:[{offset:0,label:'lib/features/dashboard/dashboard_shell.dart',change:'M'}],status:'paused'})");
+    assert.equal(await evaluate("document.querySelector('.folder').open"), false, 'collapsed folders survive playback updates');
+    await settle("document.querySelector('.folder summary').focus()");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    assert.equal(await evaluate("document.querySelector('.folder').open"), true, 'keyboard expands folders');
+    await settle("pushState({...fixturePlayback,status:'paused',activePath:'src/session.ts',files:[...fixturePlayback.files,{offset:300,label:'test/session.ts',change:'M'},{offset:400,label:'README.md',change:'A'}]})");
+    assert.equal(await evaluate("document.querySelectorAll('#files > .file-button').length"), 1, 'root files remain outside folders');
+    await settle("[...document.querySelectorAll('.file-button')].find(node=>node.title==='test/session.ts').click()");
+    assert.equal(await evaluate('commands.at(-1).offset'), 300, 'same filenames in different folders browse the right file');
+    await settle("document.querySelector('.folder[data-path=\"test\"] summary').click();pushState({...fixturePlayback,status:'paused',activePath:'test/session.test.ts'})");
+    assert.equal(await evaluate("document.querySelector('.folder[data-path=\"test\"]').open"), true, 'a newly active file reveals its folder');
     await settle('pushState(fixturePlayback)');
+    await settle("document.querySelector('#settings').click();document.querySelector('#toggle-controls').click()");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('#playback-settings')).display"), 'none');
+    assert.equal(await evaluate("document.querySelector('#toggle-controls').textContent"), 'Show controls');
+    await settle('pushState(fixturePlayback)');
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'updates keep controls hidden');
+    assert.equal(await evaluate("JSON.parse(sessionStorage.getItem('draft')).controlsHidden"), true, 'visibility preference is saved');
+    await screenshot('playback-hidden-controls.png');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Escape restores controls');
+    await settle("document.querySelector('#toggle-controls').click();document.querySelector('#toggle-controls').click()");
+    assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Show controls restores the toolbar');
+    await settle("document.querySelector('#settings').click()");
     for (const theme of ['vscode-light', 'vscode-high-contrast', 'vscode-high-contrast-light']) {
       await settle(`document.body.className=${JSON.stringify(theme)}`);
       const colors = await evaluate("({background:getComputedStyle(document.body).backgroundColor,foreground:getComputedStyle(document.querySelector('.tab.selected')).color,outline:getComputedStyle(document.querySelector('.file-button.selected')).outlineStyle,scheme:getComputedStyle(document.body).colorScheme})");
@@ -133,7 +160,7 @@ async function main() {
     assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), true);
     assert.equal((await evaluate('commands.at(-1)')).type, 'repositoryBrowse');
     await screenshot('setup-empty.png');
-    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, dartHighlighting: true, filenameFirst: true, themeColors: true, highContrast: true, keyboardFocus: true, fileBrowsing: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
+    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, dartHighlighting: true, filenameFirst: true, folderHierarchy: true, folderKeyboardToggle: true, activeFileReveal: true, hideShowControls: true, themeColors: true, highContrast: true, keyboardFocus: true, fileBrowsing: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
     await fs.writeFile(path.join(root, 'artifacts/browser-smoke.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
   } finally {
     socket?.close(); if (chrome?.pid) { chrome.kill('SIGTERM'); await new Promise(resolve => { chrome.once('exit', resolve); setTimeout(resolve, 2000).unref(); }); }

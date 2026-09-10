@@ -4,11 +4,12 @@
   const draft = api.getState() || {};
   let sessionId = document.body.dataset.session, state = {}, setup = { loading: true, repositories: [], commits: [] };
   let selectedCommit = draft.selectedCommit || null, selectionKey = draft.selectionKey || '', timingMode = 'duration', editingSetup = !!draft.editingSetup;
+  let controlsHidden = !!draft.controlsHidden;
   const send = (type, values = {}) => api.postMessage({ type, sessionId, ...values });
   const time = ms => { const seconds = Math.max(0, Math.floor((ms || 0) / 1000)); return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, '0')).join(':'); };
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
   function saveDraft() {
-    api.setState({ selectedCommit, selectionKey, timingMode, editingSetup, hours: $('hours').value,
+    api.setState({ selectedCommit, selectionKey, timingMode, editingSetup, controlsHidden, hours: $('hours').value,
       typing: $('setup-typing').value, pointer: $('setup-pointer').value, search: $('commit-search').value.slice(0, 256) });
   }
   const icon = path => {
@@ -20,12 +21,59 @@
     return node;
   };
   function glyph(name) {
-    const paths = { file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
+    const paths = { file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', folder: 'M1.5 3h5l2 2h6v8h-13z', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), path = document.createElementNS(svg.namespaceURI, 'path');
     svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('ui-icon');
     path.setAttribute('d', paths[name] || paths.file); svg.append(path); return svg;
   }
   document.querySelectorAll('[data-icon]').forEach(node => node.append(glyph(node.dataset.icon)));
+
+  function renderControls() {
+    $('playback').classList.toggle('controls-hidden', controlsHidden);
+    $('toggle-controls').textContent = controlsHidden ? 'Show controls' : 'Hide controls';
+    $('toggle-controls').setAttribute('aria-expanded', String(!controlsHidden));
+  }
+
+  let treeSession = '', treePath = '';
+  function renderFiles(running) {
+    const collapsed = new Set(treeSession === sessionId ? [...$('files').querySelectorAll('.folder:not([open])')].map(node => node.dataset.path) : []);
+    const reveal = treeSession !== sessionId || treePath !== state.activePath;
+    treeSession = sessionId; treePath = state.activePath;
+    const focusedPath = document.activeElement.closest('.folder')?.dataset.path;
+    const root = { folders: new Map(), files: [] };
+    for (const file of state.files || []) {
+      const parts = file.label.split('/'); let branch = root, path = '';
+      for (const name of parts.slice(0, -1)) {
+        path = path ? `${path}/${name}` : name;
+        if (!branch.folders.has(name)) branch.folders.set(name, { name, path, folders: new Map(), files: [] });
+        branch = branch.folders.get(name);
+      }
+      branch.files.push(file);
+    }
+    const append = (branch, parent, depth) => {
+      for (const folder of [...branch.folders.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+        const details = document.createElement('details'), summary = document.createElement('summary'), name = document.createElement('span');
+        details.className = 'folder'; details.dataset.path = folder.path;
+        details.open = !collapsed.has(folder.path) || reveal && state.activePath?.startsWith(`${folder.path}/`);
+        summary.style.setProperty('--depth', depth); summary.title = folder.path;
+        name.className = 'folder-name'; name.textContent = folder.name;
+        summary.append(glyph('chevron'), glyph('folder'), name); details.append(summary);
+        append(folder, details, depth + 1); parent.append(details);
+      }
+      for (const file of [...branch.files].sort((a, b) => a.label.localeCompare(b.label))) {
+        const button = document.createElement('button'), tag = document.createElement('span'), name = document.createElement('span');
+        button.className = `file-button${file.label === state.activePath ? ' selected' : ''}`; button.title = file.label; button.disabled = running;
+        button.style.setProperty('--depth', depth);
+        const change = ({ A: 'Added', D: 'Deleted', M: 'Modified', R: 'Renamed' })[file.change] || file.change;
+        button.setAttribute('aria-current', String(file.label === state.activePath)); button.setAttribute('aria-label', `${file.label}, ${change}`);
+        tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; tag.title = change;
+        name.className = 'file-name'; name.textContent = file.label.split('/').pop();
+        button.append(icon(file.label), name, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); parent.append(button);
+      }
+    };
+    const fragment = document.createDocumentFragment(); append(root, fragment, 0); $('files').replaceChildren(fragment);
+    if (focusedPath) [...$('files').querySelectorAll('.folder')].find(node => node.dataset.path === focusedPath)?.querySelector('summary').focus({ preventScroll: true });
+  }
 
   function renderSelection() {
     $('selected-commit').textContent = selectedCommit ? `${selectedCommit.oid.slice(0, 7)}  ${selectedCommit.subject}` : 'Choose a starting commit';
@@ -142,7 +190,8 @@
     const key = `${state.recordNumber}:${state.phase.kind}:${state.phase.editIndex}:${state.phase.target}`;
     if (key === phaseKey) return; phaseKey = key; stopPointer();
     const marker = $('virtual-pointer'); marker.hidden = false;
-    const target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('tabs') : document.querySelector('.caret') || $('code');
+    let target = state.phase.target === 'file' ? document.querySelector('.file-button.selected') || $('tabs') : document.querySelector('.caret') || $('code');
+    if (target.closest('.folder:not([open])')) target = $('tabs');
     const rect = target.getBoundingClientRect(), targetX = Math.max(5, Math.min(innerWidth - 25, rect.left + (state.phase.target === 'file' ? 30 : 2))), targetY = Math.max(5, Math.min(innerHeight - 32, rect.top + 8));
     const startX = pointerX, startY = pointerY, moving = state.phase.kind === 'move' || state.phase.kind === 'scroll';
     const duration = moving ? Math.max(1, state.phaseDurationMs - state.phaseElapsedMs) : 0, began = performance.now(); let previous = -Infinity;
@@ -196,19 +245,9 @@
     $('commit-subject').textContent = state.subject || 'Git Replay'; $('commit-subject').title = state.subject || '';
     $('phase').textContent = state.status === 'complete' ? 'Complete' : `Change ${state.recordNumber || 0} of ${state.recordCount || 0}`;
     $('file-count').textContent = String(state.files?.length || 0);
-    const filesKey = JSON.stringify([state.files, state.activePath, running]);
+    const filesKey = JSON.stringify([sessionId, state.files, state.activePath, running]);
     if (filesKey !== lastFiles) {
-      lastFiles = filesKey;
-      $('files').replaceChildren(...(state.files || []).map(file => {
-        const button = document.createElement('button'), tag = document.createElement('span'), name = document.createElement('span'), directory = document.createElement('span');
-        button.className = `file-button${file.label === state.activePath ? ' selected' : ''}`; button.title = file.label; button.disabled = running;
-        const change = ({ A: 'Added', D: 'Deleted', M: 'Modified', R: 'Renamed' })[file.change] || file.change;
-        button.setAttribute('aria-current', String(file.label === state.activePath)); button.setAttribute('aria-label', `${file.label}, ${change}`);
-        tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; tag.title = change;
-        name.className = 'file-name'; name.textContent = file.label.split('/').pop();
-        directory.className = 'file-directory'; directory.textContent = file.label.includes('/') ? file.label.slice(0, file.label.lastIndexOf('/')) : '';
-        button.append(icon(file.label), name, directory, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); return button;
-      }));
+      lastFiles = filesKey; renderFiles(running);
     }
     const tabsKey = JSON.stringify([state.tabs, state.activePath, running]);
     if (tabsKey !== lastTabs) {
@@ -251,6 +290,10 @@
   $('new-replay').addEventListener('click', () => { editingSetup = true; render(); renderSetup(); });
   $('back').addEventListener('click', () => { editingSetup = false; saveDraft(); render(); });
   $('settings').addEventListener('click', () => { $('playback-settings').hidden = !$('playback-settings').hidden; $('settings').setAttribute('aria-expanded', String(!$('playback-settings').hidden)); });
+  $('toggle-controls').addEventListener('click', () => { controlsHidden = !controlsHidden; renderControls(); saveDraft(); phaseKey = ''; pointer(); });
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && controlsHidden && !$('playback').hidden) { $('toggle-controls').click(); $('toggle-controls').focus(); }
+  });
   $('play').addEventListener('click', () => send(state.status === 'running' ? 'pause' : state.status === 'ready' ? 'start' : 'resume'));
   for (const id of ['stop', 'restart', 'clear', 'follow']) $(id).addEventListener('click', () => send(id));
   const changeSpeed = () => send('speed', { charactersPerSecond: Number($('typing').value), pointerMultiplier: Number($('pointer-speed').value) });
@@ -272,6 +315,6 @@
   motion.addEventListener('change', () => { phaseKey = ''; pointer(); });
   window.addEventListener('resize', () => { phaseKey = ''; pointer(); });
   $('hours').value = draft.hours ?? '6'; $('setup-typing').value = draft.typing ?? '24'; $('setup-pointer').value = draft.pointer ?? '1'; $('commit-search').value = draft.search ?? '';
-  setTimingMode(draft.timingMode === 'speed' ? 'speed' : 'duration'); updateTiming();
+  setTimingMode(draft.timingMode === 'speed' ? 'speed' : 'duration'); updateTiming(); renderControls();
   send('ready');
 })();
