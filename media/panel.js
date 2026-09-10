@@ -189,6 +189,40 @@
       item.content.replaceChildren(...children);
     });
   }
+  let nativeArmed = false, nativeTimer;
+  function stopNative() {
+    const wasArmed = nativeArmed;
+    nativeArmed = false; clearInterval(nativeTimer); nativeTimer = undefined;
+    $('native-enabled').checked = false; $('native-pad').hidden = true;
+    if (wasArmed) send('nativeInput', { action: 'stop', at: Date.now() });
+  }
+  $('native-enabled').addEventListener('change', () => {
+    if (!$('native-enabled').checked) stopNative();
+    else $('native-pad').hidden = false;
+  });
+  function armNative(event) {
+    if (!event.isTrusted || nativeArmed || !$('native-enabled').checked || state.status !== 'running') return;
+    if (event.type === 'keydown' && !$('native-pad').matches(':hover')) { $('native-status').textContent = 'Park the pointer inside the input field before arming.'; return; }
+    nativeArmed = true;
+    send('nativeInput', { action: 'arm', at: Date.now() });
+    nativeTimer = setInterval(() => {
+      if (document.hidden || !document.hasFocus() || document.activeElement !== $('native-pad') || state.status !== 'running') { stopNative(); return; }
+      send('nativeInput', { action: 'pulse', at: Date.now() });
+    }, 100);
+  }
+  $('native-pad').addEventListener('click', armNative);
+  $('native-pad').addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); armNative(event); }
+    else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); stopNative(); }
+    else if (['a', 'A', 'Backspace'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); }
+  });
+  $('native-pad').addEventListener('blur', stopNative);
+  $('native-pad').addEventListener('pointerleave', () => { if (nativeArmed) stopNative(); });
+  document.addEventListener('pointermove', event => { if (nativeArmed && (event.movementX || event.movementY)) stopNative(); }, true);
+  window.addEventListener('blur', stopNative);
+  window.addEventListener('resize', stopNative);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) stopNative(); });
+  document.addEventListener('scroll', () => { if (nativeArmed) stopNative(); }, true);
   let animation, pointerX = 100, pointerY = 100, phaseKey = '';
   function stopPointer() { if (animation) cancelAnimationFrame(animation); animation = undefined; $('virtual-pointer').classList.remove('clicking'); }
   function pointer() {
@@ -214,6 +248,10 @@
   }
   let lastFiles = '', lastTabs = '', lastEditor = '';
   function render() {
+    if ($('native-status').textContent !== (state.nativeStatus || 'Off')) $('native-status').textContent = state.nativeStatus || 'Off';
+    $('native-enabled').disabled = state.status !== 'running';
+    if (nativeArmed && state.status !== 'running') stopNative();
+    if (nativeArmed && !/^(Starting|Ready|Armed)/.test(state.nativeStatus || '')) { nativeArmed = false; stopNative(); }
     const running = state.status === 'running', preparing = state.status === 'preparing';
     if (running && editingSetup) { editingSetup = false; saveDraft(); }
     const showingSetup = !state.configured || editingSetup;

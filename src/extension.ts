@@ -10,6 +10,7 @@ import { createStore, openStore, Store } from './store';
 import { panelHtml, validCommand, PanelCommand } from './panel';
 import { Checkpoint, Frame, Phase, Plan } from './types';
 import { validateTiming } from './timing';
+import { createNativeInput } from './input';
 
 let shutdown: (() => Promise<void>) | undefined;
 export function activate(context: vscode.ExtensionContext): void {
@@ -30,6 +31,10 @@ export function activate(context: vscode.ExtensionContext): void {
     commits: Array<{ oid: string; subject: string }>; nextCursor: string | null; endOid: string | null; error: string | null } = {
     loading: false, repositories: [], selectedRepositoryId: null, commits: [], nextCursor: null, endOid: null, error: null,
   };
+  let nativeStatus = 'Off';
+  const native = createNativeInput(path.join(context.extensionUri.fsPath, 'native', 'input.py'),
+    vscode.workspace.getConfiguration('gitReplay').get<string>('inputPython', '') || (process.platform === 'win32' ? 'python' : 'python3'),
+    status => { if (nativeStatus !== status) { nativeStatus = status; send(true); } });
   let discovered = false;
   let repositoryHint: vscode.Uri | undefined;
   const browsedRoots: string[] = [];
@@ -57,7 +62,7 @@ export function activate(context: vscode.ExtensionContext): void {
       timing: state?.timing ?? recovery?.timing ?? plan?.timing, totalMs: state?.totalMs ?? (plan?.timing.mode === 'duration' ? plan.timing.durationMs : plan?.totals.preferredMs ?? 0),
       elapsedMs: state?.position.playbackElapsedMs ?? recovery?.pausedPosition?.playbackElapsedMs ?? recovery?.playbackElapsedMs ?? 0,
       summary: plan?.summary, recordNumber: (state?.record?.ordinal ?? -1) + 1, recordCount: plan?.totals.records ?? 0,
-      subject: state?.record?.subject ?? '', frame, phase, phaseElapsedMs, phaseDurationMs,
+      nativeStatus, subject: state?.record?.subject ?? '', frame, phase, phaseElapsedMs, phaseDurationMs,
       files: filePage, previousPage: pageOffset > commitStart, nextPage, tabs: recent, activePath, editor });
   }
   function report(cause: unknown): void { error = cause instanceof Error ? cause.message : String(cause); if (!panel) void vscode.window.showErrorMessage(error); send(true); }
@@ -165,7 +170,7 @@ export function activate(context: vscode.ExtensionContext): void {
       frame: (value, action, elapsed, duration) => { frame = value; phase = action; phaseElapsedMs = elapsed; phaseDurationMs = duration;
         const record = replay?.getState().record; if (record && record.kind !== 'milestone') activePath = label(record.change.pathBase64); send(); },
       progress: () => send(),
-      status: () => send(), error: report,
+      status: status => { if (status !== 'running') native.stop(); send(); }, error: report,
       save: (record, signal) => activeStore.save(record, activePlan.repo, signal),
       checkpoint: async value => {
         await activeStore.checkpoint(value); recovery = value;
@@ -198,6 +203,7 @@ export function activate(context: vscode.ExtensionContext): void {
     validateTiming(command.timing);
     if (replay?.getState().status === 'running') throw new Error('Pause playback before starting another session.');
     if (store && await vscode.window.showWarningMessage('Replace the current replay session and its scratch files?', { modal: true }, 'Replace session') !== 'Replace session') return;
+    native.stop();
     preparation = new AbortController(); const abort = preparation;
     busy = true; error = ''; notice = 'Preparing committed changes…'; send(true);
     let candidateStore: Store | undefined;
@@ -237,6 +243,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (command.type === 'commits') { await setupAction(() => loadCommits(command.cursor!)); return; }
     if (command.type === 'prepare') { await setupAction(() => prepare(command)); return; }
     if (!plan || !store) return;
+    if (['pause', 'stop', 'restart', 'clear'].includes(command.type)) native.stop();
     if (command.type === 'pause') await replay?.pause();
     if (command.type === 'start' || command.type === 'resume') {
       browseView = undefined;
@@ -314,10 +321,18 @@ export function activate(context: vscode.ExtensionContext): void {
     replay?.setVisible(panel.visible);
     const webview = panel.webview;
     webview.html = panelHtml({ script: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.js')).toString(), style: webview.asWebviewUri(vscode.Uri.joinPath(context.extensionUri, 'media', 'panel.css')).toString(), cspSource: webview.cspSource, nonce: randomBytes(16).toString('hex'), sessionId: sessionId() });
-    panel.onDidChangeViewState(event => { replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) { send(true); sendSetup(); } });
-    panel.onDidDispose(() => { panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
+    panel.onDidChangeViewState(event => { if (!event.webviewPanel.active || !event.webviewPanel.visible) native.stop(); replay?.setVisible(event.webviewPanel.visible); if (event.webviewPanel.visible) { send(true); sendSetup(); } });
+    panel.onDidDispose(() => { native.stop(); panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
     webview.onDidReceiveMessage((value: unknown) => {
       if (!validCommand(value, sessionId())) return;
+      if (value.type === 'nativeInput') {
+        if (value.action === 'stop') { native.stop(); return; }
+        if (!panel?.active || !panel.visible || !vscode.window.state.focused || !vscode.workspace.isTrusted
+          || busy || replay?.getState().status !== 'running' || Date.now() - value.at! < 0 || Date.now() - value.at! > 250) { native.stop(); return; }
+        if (value.action === 'arm') native.start();
+        else native.pulse(replay.getState().phase?.kind ?? 'wait', value.at!);
+        return;
+      }
       if (value.type === 'fullscreen') { void vscode.commands.executeCommand('workbench.action.toggleFullScreen').then(undefined, report); return; }
       if (value.type === 'stop' && preparation) { preparation.abort(new Error('Preparation cancelled')); return; }
       if (busy && value.type !== 'ready') return;
@@ -332,6 +347,7 @@ export function activate(context: vscode.ExtensionContext): void {
     getTreeItem: item => item,
     getChildren: () => [],
   }));
+  context.subscriptions.push(vscode.window.onDidChangeWindowState(state => { if (!state.focused) native.stop(); }));
   context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => {
     discovered = false;
     if (panel) commands = commands.then(() => setupAction(discover)).catch(report);
@@ -340,7 +356,7 @@ export function activate(context: vscode.ExtensionContext): void {
     if (event.affectsConfiguration('editor')) { editor = editorSettings(); send(true); }
   }));
   shutdown = async () => {
-    preparation?.abort(); if (postTimer) clearTimeout(postTimer);
+    native.stop(); preparation?.abort(); if (postTimer) clearTimeout(postTimer);
     await replay?.pause(); await replay?.dispose(); await disposeGit();
   };
 }

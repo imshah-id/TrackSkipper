@@ -22,19 +22,22 @@ function host(options = {}) {
     stores.push(store); return store;
   };
   const oldStore = makeStore(savedPlan), newStore = makeStore(replacementPlan);
-  let open, warningGate, workspaceChange, configurationChange;
+  let open, warningGate, workspaceChange, configurationChange, windowChange;
+  const nativeCalls = [];
   const gitCalls = [], preparations = [], savedRoots = [], executedCommands = [];
   const roots = options.roots ?? { '/repo': '/repo' };
   const vscode = {
     env: {}, workspace: { isTrusted: true, workspaceFolders: (options.folders ?? ['/repo']).map(fsPath => ({ uri: { scheme: 'file', fsPath } })),
       onDidChangeWorkspaceFolders: callback => { workspaceChange = callback; return { dispose() {} }; },
       onDidChangeConfiguration: callback => { configurationChange = callback; return { dispose() {} }; },
-      getConfiguration: section => ({ get: (key, fallback) => section === 'gitReplay' ? 1024 : options.editor?.[key] ?? fallback }) },
+      getConfiguration: section => ({ get: (key, fallback) => section === 'gitReplay' ? (key === 'storageQuotaMiB' ? 1024 : fallback) : options.editor?.[key] ?? fallback }) },
     extensions: { getExtension: () => options.gitRepositories ? { isActive: true, exports: { getAPI: () => ({ repositories: options.gitRepositories.map(fsPath => ({ rootUri: { scheme: 'file', fsPath } })) }) } } : undefined },
     Uri: { joinPath: (uri, ...parts) => ({ fsPath: path.join(uri.fsPath, ...parts), toString() { return this.fsPath; } }) },
     ViewColumn: { Active: 1 }, ProgressLocation: { Notification: 1 },
     commands: { registerCommand: (_, callback) => { open = callback; return { dispose() {} }; }, executeCommand: async name => { executedCommands.push(name); } },
     window: {
+      state: { focused: true },
+      onDidChangeWindowState: callback => { windowChange = callback; return { dispose() {} }; },
       activeTextEditor: options.activeFile ? { document: { uri: { scheme: 'file', fsPath: options.activeFile } } } : undefined,
       registerTreeDataProvider: () => ({ dispose() {} }),
       showErrorMessage: async () => {}, showWarningMessage: async () => warningGate ? await warningGate() : 'Replace session',
@@ -42,7 +45,7 @@ function host(options = {}) {
       withProgress: async (_, callback) => callback({ report() {} }, { onCancellationRequested: () => ({ dispose() {} }) }),
       createWebviewPanel() {
         vscode.window.activeTextEditor = undefined;
-        const panel = { visible: true, messages: [], reveal() {},
+        const panel = { visible: true, active: true, messages: [], reveal() {},
           onDidChangeViewState(callback) { this.change = callback; },
           onDidDispose(callback) { this.close = callback; },
           webview: { cspSource: 'local', asWebviewUri: uri => uri,
@@ -54,6 +57,7 @@ function host(options = {}) {
   };
   const mocks = {
     vscode,
+    './input': { createNativeInput: (_, __, notify) => ({ start: () => { nativeCalls.push('arm'); notify('Starting…'); }, pulse: kind => nativeCalls.push(kind), stop: () => nativeCalls.push('stop') }) },
     'node:fs/promises': { realpath: async value => options.canonical?.[value] ?? value, stat: async () => ({ size: 100 }), readFile: async () => JSON.stringify(savedPlan) },
     './git': { gitText: async (repo, args) => {
       gitCalls.push({ repo, args });
@@ -83,7 +87,7 @@ function host(options = {}) {
       let status = 'ready';
       const action = { kind: 'type', target: 'code', editIndex: 0 };
       const controller = { visible: true,
-        getState: () => ({ status, timing: plan.timing, totalMs: 1000, record: record('a.ts'),
+        getState: () => ({ status, phase: action, timing: plan.timing, totalMs: 1000, record: record('a.ts'),
           position: { recordOffset: 0, playbackElapsedMs: 0 } }),
         emit(firstLine = 0) { if (controller.visible) events.frame({ firstLine, lines: ['active a.ts'], caret: null }, action, 0, 1000); },
         setVisible(visible) { controller.visible = visible; if (visible) controller.emit(); },
@@ -99,7 +103,7 @@ function host(options = {}) {
   const extension = {};
   vm.runInNewContext(readFileSync(path.join(__dirname, '../dist/extension.js'), 'utf8'), {
     exports: extension, require: name => mocks[name] ?? require(name.startsWith('.') ? path.join(__dirname, '../dist', name) : name),
-    Buffer, performance, setTimeout, clearTimeout, AbortController,
+    Buffer, process, performance, setTimeout, clearTimeout, AbortController,
   });
   extension.activate({ globalStorageUri: { fsPath: '/extension-storage' }, extensionUri: { fsPath: '/extension' },
     globalState: { get: () => options.saved === false ? undefined : oldStore.root, update: async (_, value) => { savedRoots.push(value); } }, subscriptions: [] });
@@ -112,7 +116,8 @@ function host(options = {}) {
     assert.ok(message, 'panel ready should publish repository setup state');
     return message.setup;
   };
-  return { panels, controllers, stores, gitCalls, preparations, savedRoots, executedCommands, open: () => open(), send, setup,
+  return { panels, controllers, stores, nativeCalls,
+    windowFocus: focused => { vscode.window.state.focused = focused; windowChange({ focused }); }, gitCalls, preparations, savedRoots, executedCommands, open: () => open(), send, setup,
     state: () => panels.at(-1).messages.filter(message => message.type === 'state').at(-1),
     prepare: async () => { const current = setup();
       await send('prepare', { repositoryId: current.selectedRepositoryId, startOid: current.commits[0].oid, endOid: current.endOid, timing: savedPlan.timing }); },
@@ -396,4 +401,32 @@ test('cancellation accepted immediately before promotion preserves the previous 
     assert.equal(app.state().canCancelPreparation, false);
     assert.match(app.setup().error, /cancel/i);
   } finally { release?.(); await settle(); await app.dispose(); }
+});
+
+
+test('native input requires a fresh request, active panel, focused window, and running replay', async () => {
+  const app = host();
+  const input = action => app.send('nativeInput', { action, at: Date.now() });
+  try {
+    await app.open();
+    await input('arm');
+    assert.equal(app.nativeCalls.includes('arm'), false);
+    await app.send('resume');
+    await input('arm'); await input('pulse');
+    assert.deepEqual(app.nativeCalls.slice(-2), ['arm', 'type']);
+    app.windowFocus(false);
+    await input('arm');
+    assert.equal(app.nativeCalls.at(-1), 'stop');
+    app.windowFocus(true);
+    app.panels[0].active = false;
+    await input('arm');
+    assert.equal(app.nativeCalls.at(-1), 'stop');
+    app.panels[0].active = true;
+    await app.send('nativeInput', { action: 'arm', at: Date.now() - 1000 });
+    assert.equal(app.nativeCalls.at(-1), 'stop');
+    await input('arm'); await app.send('pause');
+    assert.equal(app.nativeCalls.at(-1), 'stop');
+    await app.close();
+    assert.equal(app.nativeCalls.at(-1), 'stop');
+  } finally { await app.dispose(); }
 });

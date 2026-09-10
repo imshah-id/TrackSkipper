@@ -92,6 +92,37 @@ async function main() {
     const view = await evaluate(`({rows:document.querySelectorAll('.code-row').length,setupHidden:document.querySelector('#setup').hidden,syntax:document.querySelectorAll('.token-keyword').length,images:document.querySelectorAll('#code img').length,text:[...document.querySelectorAll('.line-content')].slice(0,17).map(node=>node.textContent),pointer:getComputedStyle(document.querySelector('#virtual-pointer')).pointerEvents,font:getComputedStyle(document.querySelector('#code')).fontSize,footerHeight:document.querySelector('.transport').getBoundingClientRect().height})`);
     assert.equal(view.rows, 120); assert.equal(view.setupHidden, true); assert.ok(view.syntax > 0); assert.equal(view.images, 0); assert.deepEqual(view.text, playback.frame.lines); assert.equal(view.pointer, 'none'); assert.equal(view.font, '14px'); assert.ok(view.footerHeight < 40);
     await screenshot('playback-desktop.png');
+    assert.equal(await evaluate("document.querySelector('#native-pad').hidden"), true);
+    await settle("document.querySelector('#native-enabled').click();document.querySelector('#native-pad').click()");
+    assert.equal(await evaluate("commands.some(command => command.type === 'nativeInput')"), false, 'scripted clicks cannot arm system input');
+    const padPoint = await evaluate("(()=>{const r=document.querySelector('#native-pad').getBoundingClientRect();return {x:r.left+r.width/2,y:r.top+r.height/2}})()");
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...padPoint, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...padPoint, button: 'left', clickCount: 1 });
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'arm');
+    await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");
+    await screenshot('playback-native-input.png');
+    const padText = await evaluate("document.querySelector('#native-pad').value");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, text: 'a' });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
+    assert.equal(await evaluate("document.querySelector('#native-pad').value"), padText, 'native input target stays inert');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'stop');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), false);
+    await settle("document.querySelector('#native-enabled').click();document.querySelector('#native-pad').focus()");
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 10, y: 10 });
+    const armsBefore = await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length");
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), armsBefore, 'keyboard cannot arm with the pointer outside the inert field');
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...padPoint });
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), armsBefore + 1);
+    await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'});document.querySelector('#play').focus()");
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'stop', 'leaving the input field disarms immediately');
+
+    await settle('pushState(fixturePlayback)');
+
     for (const kind of ['type', 'delete', 'wait', 'save']) {
       await settle(`pushState({...fixturePlayback,phase:{...fixturePlayback.phase,kind:${JSON.stringify(kind)}}})`);
       assert.equal(await evaluate("document.querySelector('#virtual-pointer').hidden"), true, 'mouse pointer is hidden while typing or waiting');
@@ -191,7 +222,7 @@ async function main() {
     assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), true);
     assert.equal((await evaluate('commands.at(-1)')).type, 'repositoryBrowse');
     await screenshot('setup-empty.png');
-    const result = { inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, dartHighlighting: true, filenameFirst: true, folderHierarchy: true, folderKeyboardToggle: true, activeFileReveal: true, hideShowControls: true, themeColors: true, highContrast: true, keyboardFocus: true, fileBrowsing: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
+    const result = { nativeInputArmingAndEscape: true, inertNativeTarget: true, inlineSetup: true, formDraftSurvivesReload: true, commitSelectionSurvivesPaging: true, preparationRetry: true, sourceTextPreserved: true, boundedRows: view.rows, syntaxHighlighting: true, dartHighlighting: true, filenameFirst: true, folderHierarchy: true, folderKeyboardToggle: true, activeFileReveal: true, hideShowControls: true, themeColors: true, highContrast: true, keyboardFocus: true, fileBrowsing: true, pointerDoesNotIntercept: true, reducedMotion: true, typography: true, narrowLayout: true };
     await fs.writeFile(path.join(root, 'artifacts/browser-smoke.json'), JSON.stringify(result, null, 2)); console.log(JSON.stringify(result, null, 2));
   } finally {
     socket?.close(); if (chrome?.pid) { chrome.kill('SIGTERM'); await new Promise(resolve => { chrome.once('exit', resolve); setTimeout(resolve, 2000).unref(); }); }

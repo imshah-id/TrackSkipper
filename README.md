@@ -1,6 +1,6 @@
 # Git Replay
 
-Replay an inclusive range of Git commits in an isolated VS Code panel. Code appears progressively, with an animated pointer that moves, hovers and clicks inside the preview. Your actual mouse, keyboard, source files, index and Git history remain independent.
+Replay an inclusive range of Git commits in an isolated VS Code panel. Code appears progressively, with an animated pointer that moves, hovers and clicks inside the preview. By default your actual mouse and keyboard remain independent. Optional VM system input emits guarded native events; source files, index and Git history remain independent.
 
 ## Install
 
@@ -26,6 +26,20 @@ The start commit is included. The ending commit is pinned to HEAD when the repos
 
 Preparation, file I/O and explicit pauses add wall-clock time. The displayed active timeline is not a guarantee of completion at a particular clock time. Reduced motion hides the animated pointer.
 
+## VM system input (experimental)
+
+Run VS Code, Python 3, and your input-monitoring app **inside the same VM**. During playback, enable **VM system input**, then click the input field and leave the pointer there. It starts disabled and must be explicitly re-armed after interruption. If Python is not on PATH, set `gitReplay.inputPython` to its executable and reload the extension.
+
+Replay samples active phases into native **A**, **Backspace**, stationary mouse-move events, and left clicks at the arming position, capped at two actions per second. Text and clicks land in a read-only field; they do not execute code or change files. These are sample events for monitoring, not an exact reproduction of the commit text or original input. It sends no modifiers, Enter, navigation keys, scrolls, window commands, or launch commands. The pointer is never relocated.
+
+**Escape**, Pause, Stop, panel/window focus loss, pointer movement, or a hidden panel disarms input. The helper also rejects stale requests, changed native focus/coordinates, and held keys/buttons. There is only one outstanding request, with no event backlog. Down/up events are sent together. The helper exits through stdin closure without opening a terminal or another application window.
+
+- **Windows:** native `SendInput`; Python and VS Code should run at the same privilege level. Blocked injection stops the helper.
+- **macOS:** Quartz events and Accessibility focus checks. Grant the Python helper Accessibility permission manually if its status requests it. The extension does not open System Settings or request permission automatically.
+- **Linux:** X11 with `libX11` and `libXtst`/XTEST. Wayland fails closed; it is not supported.
+
+Global injection cannot guarantee zero side effects under custom hotkeys, remapping software, overlays, or a focus change racing event delivery. Use a disposable VM. A monitor can identify these events as synthetic; detection/counting depends on that app. Automated checks exercise the guards and panel arming; actual native delivery in the three VM operating systems is **not yet validated**. The local macOS permission-denial path was verified without posting events.
+
 ## Storage and limits
 
 Only paths changed in the selected range are saved. This is a sparse reconstruction, not a full checkout. Each completed file is saved atomically as an inert, hashed `.data` file with `.json` metadata under the extension's global storage; original Git path bytes are retained in metadata. Deleted paths have tombstones. Symlinks are saved as inert bytes; submodules retain their object ID. Nothing from the repository is executed.
@@ -34,11 +48,11 @@ UTF-8 files up to 1 MiB with lines up to 8 KiB are animated. Binary, invalid UTF
 
 The preview renders at most 120 code rows and 64 KiB of text per frame. It uses VS Code theme colors and editor font settings, a small visible-window syntax highlighter, five recent tabs, 100-entry pages and no runtime packages. The preview is a webview; syntax colors support light/dark palettes and common languages, rather than full VS Code language grammars or custom token themes. The host throttles routine updates to 10 Hz; pointer movement is capped at 30 Hz. Git reads use at most two child processes.
 
-This is a reconstruction from commits, not a recording of the original editing session. It does not send system input or provide verified screen-tracker evasion.
+This is a reconstruction from commits, not a recording of the original editing session. System input is off unless explicitly armed as described above; no screen-tracker evasion is claimed.
 
 ## Develop and verify
 
-Node.js 22+ is required for development. Run `npm ci`, then:
+Node.js 22+ and Python 3 are required for development and tests. Run `npm ci`, then:
 
 ```sh
 npm test
@@ -64,6 +78,6 @@ For 10× the commits, preparation took 10.13× as long and retained heap grew by
 
 Extension-owned working memory is bounded by the active text, edit record, viewport and fixed pages; history and output grow on disk. Preparation reads every selected change and invokes Git's diff, whose cost depends on the contents. Saves stream each changed target blob. Changing speed rescans the remaining plan to estimate its duration without retaining it in memory.
 
-Validation: **38 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness selected a discovered repository and submitted the inline preparation command. Chromium checks verified inline setup and paging, form persistence, corrected retries, syntax rendering without interpreting source as HTML, 120 row nodes, editor typography, narrow layouts, and reduced motion.
+Validation: **43 automated tests pass**, including a virtual six-hour reconstruction. The VSIX installed and activated in an isolated VS Code **1.137.0** profile (Node 24.18.1). A short replay through the packaged integration, actual webview, controller and store completed with exact bytes and unchanged dirty source; the test harness selected a discovered repository and submitted the inline preparation command. Chromium checks verified inline setup and paging, form persistence, corrected retries, syntax rendering without interpreting source as HTML, 120 row nodes, editor typography, narrow layouts, and reduced motion.
 
 A manual session while using another app, Windows/Linux compatibility, real six-hour reliability, and measured UI/pointer frequencies and pause/stop p95 latency remain unverified. The frequency limits above are implementation caps, not measured real-time guarantees.

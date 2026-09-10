@@ -9,3 +9,4 @@ artifacts/
 !README.md
 session.json
 graphify-out
+__pycache__/

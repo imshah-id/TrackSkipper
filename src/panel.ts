@@ -1,13 +1,16 @@
 import { validateTiming } from './timing';
 import { Timing } from './types';
-export type PanelCommand = { type: string; sessionId: string; firstLine?: number; offset?: number; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
+export type PanelCommand = { type: string; sessionId: string; action?: 'arm' | 'pulse' | 'stop'; at?: number; firstLine?: number; offset?: number; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
 export function validCommand(value: unknown, sessionId: string): value is PanelCommand {
   if (!value || typeof value !== 'object') return false;
   const input = value as Record<string, unknown>;
   if (input.sessionId !== sessionId || typeof input.type !== 'string') return false;
   const keys = ['type', 'sessionId'];
   const oid = (value: unknown) => typeof value === 'string' && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
-  if (input.type === 'repository' || input.type === 'prepare') {
+  if (input.type === 'nativeInput') {
+    keys.push('action', 'at');
+    if (!['arm', 'pulse', 'stop'].includes(input.action as string) || !Number.isSafeInteger(input.at) || (input.at as number) < 0) return false;
+  } else if (input.type === 'repository' || input.type === 'prepare') {
     keys.push('repositoryId');
     if (typeof input.repositoryId !== 'string' || !input.repositoryId.length || input.repositoryId.length > 1024) return false;
     if (input.type === 'prepare') {
@@ -59,7 +62,7 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <div id="duration-settings"><label for="hours">Finish in</label><div class="duration-input"><input id="hours" type="number" min="0.001" max="720" step="any" value="6" required><span>hours</span></div><div class="presets"><button type="button" data-hours="0.25">15 min</button><button type="button" data-hours="1">1 hour</button><button type="button" data-hours="6" aria-pressed="true">6 hours</button></div><p class="hint">Typing and pauses are paced to fit. Pausing playback extends the finish time.</p></div>
 <div id="speed-settings" hidden><label for="setup-typing">Typing speed <output id="setup-typing-value">24 char/s</output></label><input id="setup-typing" type="range" min="1" max="200" value="24"><label for="setup-pointer">Pointer speed <output id="setup-pointer-value">1×</output></label><input id="setup-pointer" type="range" min="0.25" max="4" step="0.25" value="1"><p class="hint">Duration follows the amount of code. You can adjust these speeds while paused.</p></div>
 <div class="range-summary"><span class="hint">Selected range · inclusive</span><strong id="selected-commit">Choose a starting commit</strong><span class="hint">↓ through latest <code id="end-commit">—</code></span></div>
-<p class="isolation-note">Runs in its own scratch workspace. Your files, keyboard, and mouse stay yours.</p>
+<p class="isolation-note">Runs in its own scratch workspace. Your files stay isolated. System input is off unless you enable VM system input during playback.</p>
 </section>
 </div>
 <footer class="setup-actions"><span id="selection-hint" class="hint">Choose a repository and a starting commit.</span><button id="cancel-prepare" type="button" class="secondary" hidden>Cancel</button><button id="start-replay" type="submit" class="primary" disabled>Start replay</button></footer>
@@ -74,6 +77,7 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <div class="breadcrumbs"><span id="file-path">Git Replay</span><div class="editor-actions"><button id="follow" class="text-button" disabled>Follow playback</button><button id="toggle-controls" class="text-button" aria-expanded="true" aria-controls="transport playback-settings" title="Hide playback controls (Escape to restore)"><span data-icon="settings"></span><span id="controls-label">Hide controls</span></button>${fullscreen}</div></div>
 <div id="empty" class="editor-empty"><p id="empty-message">Opening the first file…</p></div>
 <div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Read-only replay code" hidden><div id="code" class="code"></div></div>
+<div class="native-input"><label><input id="native-enabled" type="checkbox"> VM system input</label><span id="native-status" role="status">Off</span><textarea id="native-pad" aria-label="Git Replay native input field" readonly hidden spellcheck="false">Leave the pointer here, then click or press Enter to arm. Native A/Backspace and left clicks target this inert field. Escape stops input.</textarea></div>
 <div class="editor-foot"><span id="commit-subject"></span><span id="phase"></span></div>
 </main>
 </div>

@@ -41,6 +41,12 @@
           "maximum": 20480,
           "scope": "application",
           "description": "Maximum storage for the replay session, in MiB."
+        },
+        "gitReplay.inputPython": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Python 3 executable for VM system input. Empty uses python on Windows and python3 elsewhere. Reload the extension after changing."
         }
       }
     },
