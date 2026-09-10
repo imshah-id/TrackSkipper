@@ -316,6 +316,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.onDidDispose(() => { panel = undefined; replay?.setVisible(false); void replay?.pause().catch(report); });
     webview.onDidReceiveMessage((value: unknown) => {
       if (!validCommand(value, sessionId())) return;
+      if (value.type === 'fullscreen') { void vscode.commands.executeCommand('workbench.action.toggleFullScreen').then(undefined, report); return; }
       if (value.type === 'stop' && preparation) { preparation.abort(new Error('Preparation cancelled')); return; }
       if (busy && value.type !== 'ready') return;
       commands = commands.then(() => handle(value)).catch(report);

@@ -21,12 +21,13 @@
     return node;
   };
   function glyph(name) {
-    const paths = { file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', folder: 'M1.5 3h5l2 2h6v8h-13z', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
+    const paths = { fullscreen: 'M6 2H2v4 M10 2h4v4 M14 10v4h-4 M6 14H2v-4', file: 'M9 1.5H3.5v13h9V5z M9 1.5V5h3.5', folder: 'M1.5 3h5l2 2h6v8h-13z', play: 'M4 2.5v11l9-5.5z', pause: 'M5 3v10 M11 3v10', stop: 'M3.5 3.5h9v9h-9z', restart: 'M2 6a6 6 0 1 1 .5 5 M2 2v4h4', plus: 'M8 2v12 M2 8h12', chevron: 'm4 6 4 4 4-4', settings: 'M2 4h12 M2 12h12 M5 2v4 M11 10v4' };
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), path = document.createElementNS(svg.namespaceURI, 'path');
     svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('ui-icon');
     path.setAttribute('d', paths[name] || paths.file); svg.append(path); return svg;
   }
   document.querySelectorAll('[data-icon]').forEach(node => node.append(glyph(node.dataset.icon)));
+  document.querySelectorAll('[data-fullscreen]').forEach(button => button.addEventListener('click', () => send('fullscreen')));
 
   function renderControls() {
     $('playback').classList.toggle('controls-hidden', controlsHidden);

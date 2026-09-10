@@ -23,7 +23,7 @@ function host(options = {}) {
   };
   const oldStore = makeStore(savedPlan), newStore = makeStore(replacementPlan);
   let open, warningGate, workspaceChange, configurationChange;
-  const gitCalls = [], preparations = [], savedRoots = [];
+  const gitCalls = [], preparations = [], savedRoots = [], executedCommands = [];
   const roots = options.roots ?? { '/repo': '/repo' };
   const vscode = {
     env: {}, workspace: { isTrusted: true, workspaceFolders: (options.folders ?? ['/repo']).map(fsPath => ({ uri: { scheme: 'file', fsPath } })),
@@ -33,7 +33,7 @@ function host(options = {}) {
     extensions: { getExtension: () => options.gitRepositories ? { isActive: true, exports: { getAPI: () => ({ repositories: options.gitRepositories.map(fsPath => ({ rootUri: { scheme: 'file', fsPath } })) }) } } : undefined },
     Uri: { joinPath: (uri, ...parts) => ({ fsPath: path.join(uri.fsPath, ...parts), toString() { return this.fsPath; } }) },
     ViewColumn: { Active: 1 }, ProgressLocation: { Notification: 1 },
-    commands: { registerCommand: (_, callback) => { open = callback; return { dispose() {} }; } },
+    commands: { registerCommand: (_, callback) => { open = callback; return { dispose() {} }; }, executeCommand: async name => { executedCommands.push(name); } },
     window: {
       activeTextEditor: options.activeFile ? { document: { uri: { scheme: 'file', fsPath: options.activeFile } } } : undefined,
       registerTreeDataProvider: () => ({ dispose() {} }),
@@ -112,7 +112,7 @@ function host(options = {}) {
     assert.ok(message, 'panel ready should publish repository setup state');
     return message.setup;
   };
-  return { panels, controllers, stores, gitCalls, preparations, savedRoots, open: () => open(), send, setup,
+  return { panels, controllers, stores, gitCalls, preparations, savedRoots, executedCommands, open: () => open(), send, setup,
     state: () => panels.at(-1).messages.filter(message => message.type === 'state').at(-1),
     prepare: async () => { const current = setup();
       await send('prepare', { repositoryId: current.selectedRepositoryId, startOid: current.commits[0].oid, endOid: current.endOid, timing: savedPlan.timing }); },
@@ -123,6 +123,22 @@ function host(options = {}) {
     dispose: () => extension.deactivate(),
   };
 }
+
+test('fullscreen uses the native window toggle from setup and playback with no replay changes', async () => {
+  for (const saved of [false, true]) {
+    const app = host({ saved });
+    try {
+      await app.open();
+      await app.send('fullscreen', {}, 'stale-session');
+      await app.send('fullscreen', { command: 'arbitrary.command' });
+      assert.equal(app.executedCommands.length, 0);
+      await app.send('fullscreen'); await app.send('fullscreen');
+      assert.deepEqual(app.executedCommands, ['workbench.action.toggleFullScreen', 'workbench.action.toggleFullScreen']);
+      assert.equal(app.controllers.length, 0);
+      assert.equal(app.preparations.length, 0);
+    } finally { await app.dispose(); }
+  }
+});
 
 test('reopened panel makes the existing paused replay visible before resume', async () => {
   const app = host();

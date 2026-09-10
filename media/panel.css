@@ -53,6 +53,8 @@ output { float: right; font: 11px var(--mono); color: var(--muted) }
 .setup-content { max-width: 920px; margin: 0 auto }
 .setup-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 28px }
 .setup-heading p { color: var(--muted); margin: 8px 0 0 }
+.setup-heading-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+[data-fullscreen] { flex: none; min-height: 24px }
 .repository-section { padding-bottom: 24px }
 .repository-controls { display: flex; gap: 8px }
 .repository-controls select { flex: 1 }
@@ -195,6 +197,7 @@ progress::-webkit-progress-value { background: var(--focus) }
 ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background, #79797966) }
 ::-webkit-scrollbar-thumb:hover { background: var(--vscode-scrollbarSlider-hoverBackground, #646464b3) }
 @media (max-width: 760px) {
+  .breadcrumbs .fullscreen-label { display: none }
   .setup { padding: 24px 20px }
   .setup-columns { grid-template-columns: minmax(0, 1fr) 220px; gap: 20px }
   .timing-section { padding-left: 20px }

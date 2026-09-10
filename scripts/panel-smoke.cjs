@@ -64,6 +64,8 @@ async function main() {
     assert.equal(await evaluate("document.querySelector('#repository').options.length"), 2);
     assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), false);
     await screenshot('setup-desktop.png');
+    await settle("document.querySelector('#setup [data-fullscreen]').click()");
+    assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'fullscreen', sessionId: 'idle' });
     await settle("document.querySelectorAll('.commit-option input')[2].click();document.querySelector('#commit-search').value='no match';document.querySelector('#commit-search').dispatchEvent(new Event('input'))");
     assert.equal(await evaluate("document.querySelectorAll('.commit-option').length"), 0);
     assert.equal(await evaluate("document.querySelector('#start-replay').disabled"), false, 'filtered selection stays usable');
@@ -116,6 +118,9 @@ async function main() {
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'updates keep controls hidden');
     assert.equal(await evaluate("JSON.parse(sessionStorage.getItem('draft')).controlsHidden"), true, 'visibility preference is saved');
     await screenshot('playback-hidden-controls.png');
+    assert.ok(await evaluate("document.querySelector('#playback [data-fullscreen]').getBoundingClientRect().width > 0"), 'fullscreen stays accessible with controls hidden');
+    await settle("document.querySelector('#playback [data-fullscreen]').click()");
+    assert.deepEqual(await evaluate('commands.at(-1)'), { type: 'fullscreen', sessionId: 'playing' });
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.transport')).display"), 'none', 'Escape restores controls');
     await settle("document.querySelector('#toggle-controls').click();document.querySelector('#toggle-controls').click()");

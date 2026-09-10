@@ -24,12 +24,13 @@ export function validCommand(value: unknown, sessionId: string): value is PanelC
   } else if (input.type === 'viewport' || input.type === 'browse' || input.type === 'page') {
     const key = input.type === 'viewport' ? 'firstLine' : 'offset'; keys.push(key);
     if (!Number.isSafeInteger(input[key]) || (input[key] as number) < 0) return false;
-  } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow'].includes(input.type)) return false;
+  } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow', 'fullscreen'].includes(input.type)) return false;
   return Object.keys(input).every(key => keys.includes(key));
 }
 
 export function panelHtml(options: { script: string; style: string; cspSource: string; nonce: string; sessionId: string }): string {
   const attr = (value: string) => value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
+  const fullscreen = '<button type="button" data-fullscreen class="text-button" aria-label="Toggle VS Code full screen" title="Toggle VS Code full screen. Keeps your sidebar and top bar layout; click again to exit."><span data-icon="fullscreen"></span><span class="fullscreen-label">Full screen</span></button>';
   return `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${attr(options.cspSource)}; script-src 'nonce-${attr(options.nonce)}';">
 <title>Git Replay</title><link rel="stylesheet" href="${attr(options.style)}"></head>
@@ -37,7 +38,7 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <div id="notice" class="notice" role="status" hidden></div>
 <main id="setup" class="setup">
 <div class="setup-content">
-<header class="setup-heading"><div><h1>Set up a replay</h1><p>Choose where to start. Replay through the latest commit.</p></div><button id="back" class="secondary" hidden>Back to playback</button></header>
+<header class="setup-heading"><div><h1>Set up a replay</h1><p>Choose where to start. Replay through the latest commit.</p></div><div class="setup-heading-actions">${fullscreen}<button id="back" class="secondary" hidden>Back to playback</button></div></header>
 <section class="repository-section" aria-labelledby="repository-label">
 <label id="repository-label" for="repository">Repository</label>
 <div class="repository-controls"><select id="repository" disabled><option>Finding repositories…</option></select><button id="refresh" class="secondary" title="Refresh repositories and latest commit">Refresh</button><button id="browse-repository" class="secondary">Browse…</button></div>
@@ -70,7 +71,7 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 <aside class="explorer" aria-label="Replayed files"><div class="explorer-heading"><span>CHANGED FILES</span><button id="new-replay" title="Set up another replay" aria-label="Set up another replay"><span data-icon="plus"></span></button></div><div class="folder-heading"><span data-icon="chevron"></span><strong id="workspace-name">REPLAY</strong><span id="file-count"></span></div><div id="files" aria-label="Files changed in this commit"></div><p id="files-hint" class="files-hint">Pause to browse files</p><div class="file-pager"><button id="previous-files" class="text-button" disabled>Previous</button><button id="next-files" class="text-button" disabled>Next</button></div><button id="clear" class="text-button clear-session" disabled>Clear session</button></aside>
 <main class="editor" aria-label="Replay code preview">
 <nav id="tabs" class="tabs" aria-label="Recent files"><span class="tab empty-tab">Preview</span></nav>
-<div class="breadcrumbs"><span id="file-path">Git Replay</span><span class="preview-label">Read-only</span><button id="follow" class="text-button" disabled>Follow playback</button><button id="toggle-controls" class="text-button" aria-expanded="true" aria-controls="transport playback-settings" title="Hide playback controls (Escape to restore)">Hide controls</button></div>
+<div class="breadcrumbs"><span id="file-path">Git Replay</span><span class="preview-label">Read-only</span><button id="follow" class="text-button" disabled>Follow playback</button><button id="toggle-controls" class="text-button" aria-expanded="true" aria-controls="transport playback-settings" title="Hide playback controls (Escape to restore)">Hide controls</button>${fullscreen}</div>
 <div id="empty" class="editor-empty"><p id="empty-message">Opening the first file…</p></div>
 <div id="code-scroll" class="code-scroll" tabindex="0" aria-label="Read-only replay code" hidden><div id="code" class="code"></div></div>
 <div class="editor-foot"><span id="commit-subject"></span><span id="phase"></span></div>
