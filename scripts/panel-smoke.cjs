@@ -170,6 +170,13 @@ async function main() {
     assert.equal(await evaluate("document.querySelector('.folder').open"), true, 'keyboard expands folders');
     await settle("pushState({...fixturePlayback,status:'paused',activePath:'src/session.ts',files:[...fixturePlayback.files,{offset:300,label:'test/session.ts',change:'M'},{offset:400,label:'README.md',change:'A'}]})");
     assert.equal(await evaluate("document.querySelectorAll('#files > .file-button').length"), 1, 'root files remain outside folders');
+    await settle("pushState({...fixturePlayback,status:'paused',files:[...fixturePlayback.files,{pathBase64:'UkVBRE1FLm1k',label:'README.md',change:''}]})");
+    assert.equal(await evaluate("document.querySelector('.explorer-heading').textContent.trim()"), 'EXPLORER');
+    assert.equal(await evaluate("document.querySelector('.file-button[title=\"README.md\"]').getAttribute('aria-label')"), 'README.md');
+    await settle("document.querySelector('.file-button[title=\"README.md\"]').click()");
+    assert.equal(await evaluate('commands.at(-1).pathBase64'), 'UkVBRE1FLm1k', 'unchanged files browse by their exact repository path');
+    await screenshot('playback-full-explorer.png');
+    await settle("pushState({...fixturePlayback,status:'paused',files:[...fixturePlayback.files,{offset:300,label:'test/session.ts',change:'M'}]})");
     await settle("[...document.querySelectorAll('.file-button')].find(node=>node.title==='test/session.ts').click()");
     assert.equal(await evaluate('commands.at(-1).offset'), 300, 'same filenames in different folders browse the right file');
     await settle("document.querySelector('.folder[data-path=\"test\"] summary').click();pushState({...fixturePlayback,status:'paused',activePath:'test/session.test.ts'})");

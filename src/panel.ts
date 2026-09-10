@@ -1,6 +1,6 @@
 import { validateTiming } from './timing';
 import { Timing } from './types';
-export type PanelCommand = { type: string; sessionId: string; action?: 'arm' | 'pulse' | 'stop'; at?: number; firstLine?: number; offset?: number; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
+export type PanelCommand = { type: string; sessionId: string; action?: 'arm' | 'pulse' | 'stop'; at?: number; firstLine?: number; offset?: number; pathBase64?: string; charactersPerSecond?: number; pointerMultiplier?: number; repositoryId?: string; cursor?: string | null; startOid?: string; endOid?: string; timing?: Timing };
 export function validCommand(value: unknown, sessionId: string): value is PanelCommand {
   if (!value || typeof value !== 'object') return false;
   const input = value as Record<string, unknown>;
@@ -24,7 +24,11 @@ export function validCommand(value: unknown, sessionId: string): value is PanelC
   } else if (input.type === 'speed') {
     keys.push('charactersPerSecond', 'pointerMultiplier');
     try { validateTiming({ mode: 'speed', charactersPerSecond: input.charactersPerSecond, pointerMultiplier: input.pointerMultiplier }); } catch { return false; }
-  } else if (input.type === 'viewport' || input.type === 'browse' || input.type === 'page') {
+  } else if (input.type === 'browse' && input.pathBase64 !== undefined) {
+    keys.push('pathBase64');
+    if (typeof input.pathBase64 !== 'string' || !input.pathBase64.length || input.pathBase64.length > 65536
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(input.pathBase64)) return false;
+  } else if (input.type === 'viewport' || input.type === 'browse') {
     const key = input.type === 'viewport' ? 'firstLine' : 'offset'; keys.push(key);
     if (!Number.isSafeInteger(input[key]) || (input[key] as number) < 0) return false;
   } else if (!['ready', 'configure', 'discover', 'repositoryBrowse', 'start', 'pause', 'resume', 'stop', 'restart', 'clear', 'follow', 'fullscreen'].includes(input.type)) return false;
@@ -71,7 +75,7 @@ export function panelHtml(options: { script: string; style: string; cspSource: s
 </main>
 <div id="playback" class="playback" hidden>
 <div class="workbench">
-<aside class="explorer" aria-label="Replayed files"><div class="explorer-heading"><span>CHANGED FILES</span><button id="new-replay" title="Set up another replay" aria-label="Set up another replay"><span data-icon="plus"></span></button></div><div class="folder-heading"><span data-icon="chevron"></span><strong id="workspace-name">REPLAY</strong><span id="file-count"></span></div><div id="files" aria-label="Files changed in this commit"></div><p id="files-hint" class="files-hint">Pause to browse files</p><div class="file-pager"><button id="previous-files" class="text-button" disabled>Previous</button><button id="next-files" class="text-button" disabled>Next</button></div><button id="clear" class="text-button clear-session" disabled>Clear session</button></aside>
+<aside class="explorer" aria-label="Replayed files"><div class="explorer-heading"><span>EXPLORER</span><button id="new-replay" title="Set up another replay" aria-label="Set up another replay"><span data-icon="plus"></span></button></div><div class="folder-heading"><span data-icon="chevron"></span><strong id="workspace-name">REPLAY</strong><span id="file-count"></span></div><div id="files" aria-label="Repository files at this commit"></div><p id="files-hint" class="files-hint">Pause to browse files</p><button id="clear" class="text-button clear-session" disabled>Clear session</button></aside>
 <main class="editor" aria-label="Replay code preview">
 <nav id="tabs" class="tabs" aria-label="Recent files"><span class="tab empty-tab">Preview</span></nav>
 <div class="breadcrumbs"><span id="file-path">Git Replay</span><div class="editor-actions"><button id="follow" class="text-button" disabled>Follow playback</button><button id="toggle-controls" class="text-button" aria-expanded="true" aria-controls="transport playback-settings native-input" title="Hide playback controls (Escape to restore)"><span data-icon="settings"></span><span id="controls-label">Hide controls</span></button>${fullscreen}</div></div>

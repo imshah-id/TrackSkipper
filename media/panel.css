@@ -129,7 +129,6 @@ body.vscode-light .file-tag[data-change=D] { color: var(--vscode-gitDecoration-d
 .file-icon[data-kind=dart] { font-style: italic; font-size: 14px }
 body.vscode-light .file-icon:is([data-kind=js], [data-kind=json]) { color: #795e26 }
 body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
-.file-pager { display: flex; justify-content: space-between; padding: 4px 8px; border-top: 1px solid var(--border) }
 .clear-session { margin: 2px 8px 8px; align-self: flex-start; font-size: 11px }
 .editor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg) }
 .tabs { display: flex; height: 35px; flex: none; overflow: auto; background: var(--vscode-editorGroupHeader-tabsBackground, var(--sidebar)) }
@@ -141,7 +140,7 @@ body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
 .breadcrumbs button { font-size: 11px; padding: 3px 5px }
 .editor-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex: none }
 #toggle-controls { flex: none }
-.controls-hidden :is(.tabs, .transport, .native-input, .playback-settings, .editor-foot, .file-pager, .clear-session, .files-hint, #follow, #new-replay) { display: none !important }
+.controls-hidden :is(.tabs, .transport, .native-input, .playback-settings, .editor-foot, .clear-session, .files-hint, #follow, #new-replay) { display: none !important }
 .controls-hidden .explorer-heading { height: 24px }
 .controls-hidden :is(#controls-label, .fullscreen-label) { display: none }
 .controls-hidden .editor-actions button { width: 24px; height: 22px; min-height: 0; padding: 3px }

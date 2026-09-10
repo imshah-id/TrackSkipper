@@ -73,7 +73,13 @@ function host(options = {}) {
       gitCalls.push({ repo, tip });
       if (options.pageError?.includes(repo)) throw new Error('Git object unavailable');
       return options.pages?.[tip] ?? [{ oid, parentOid: null, subject: 'Commit' }];
-    }, objectInfo: async () => {}, disposeGit: async () => {} },
+    }, readTree: async (repo, commit, signal) => {
+      gitCalls.push({ repo, tree: commit });
+      if (options.treeGate) return options.treeGate(commit, signal);
+      return (options.treeFiles ?? ['a.ts', 'b.ts', 'README.md']).map((name, index) => ({
+        pathBase64: Buffer.from(name).toString('base64'), oid, mode: options.treeModes?.[name] ?? '100644', change: index === 0 ? 'M' : '',
+      }));
+    }, objectInfo: async () => ({ type: 'blob', size: 200 }), disposeGit: async () => {} },
     './plan': { preparePlan: async (repo, startOid, endOid, timing, _, signal) => {
       preparations.push({ repo, startOid, endOid, timing });
       if (options.prepareGate) await options.prepareGate(signal);
@@ -92,6 +98,7 @@ function host(options = {}) {
         emit(firstLine = 0) { if (controller.visible) events.frame({ firstLine, lines: ['active a.ts'], caret: null }, action, 0, 1000); },
         setVisible(visible) { controller.visible = visible; if (visible) controller.emit(); },
         async start() { status = 'running'; events.record(record('a.ts')); controller.emit(); },
+        record: events.record,
         async pause() { status = 'paused'; controller.emit(); },
         resume() { status = 'running'; controller.emit(); },
         setViewport(firstLine) { controller.emit(firstLine); },
@@ -428,5 +435,59 @@ test('native input requires a fresh request, active panel, focused window, and r
     assert.equal(app.nativeCalls.at(-1), 'stop');
     await app.close();
     assert.equal(app.nativeCalls.at(-1), 'stop');
+  } finally { await app.dispose(); }
+});
+
+
+test('explorer shows and browses unchanged repository files, including beyond the old 100-file page', async () => {
+  const treeFiles = ['a.ts', ...Array.from({ length: 120 }, (_, i) => `nested/file-${i}.ts`), 'README.md'];
+  const app = host({ treeFiles });
+  try {
+    await app.open(); await app.send('resume'); await app.send('pause');
+    assert.equal(app.state().files.length, 122);
+    const file = app.state().files.find(file => file.label === 'nested/file-119.ts');
+    assert.equal(file.change, '');
+    await app.send('browse', { pathBase64: file.pathBase64 });
+    assert.equal(app.state().activePath, 'nested/file-119.ts');
+    assert.match(app.state().frame.lines[0], /b line 0/);
+    assert.equal(app.state().tabs[0].pathBase64, file.pathBase64);
+    await app.send('viewport', { firstLine: 6 });
+    assert.match(app.state().frame.lines[0], /b line 6/);
+    await app.send('browse', { pathBase64: Buffer.from('/outside.txt').toString('base64') });
+    assert.equal(app.state().activePath, 'nested/file-119.ts', 'only entries in the current tree can be opened');
+    await app.send('resume');
+    await app.send('browse', { pathBase64: file.pathBase64 });
+    assert.equal(app.state().activePath, 'a.ts', 'running replay retains control of the preview');
+  } finally { await app.dispose(); }
+});
+
+
+test('repository tree refreshes for each commit and discards a delayed previous tree', async () => {
+  const pending = [];
+  const app = host({ treeGate: (commit, signal) => new Promise(resolve => pending.push({ commit, signal, resolve })) });
+  const tree = name => [{ pathBase64: Buffer.from(name).toString('base64'), oid: 'a'.repeat(40), mode: '100644', change: '' }];
+  try {
+    await app.open(); await app.send('resume');
+    app.controllers[0].record({ kind: 'milestone', commitOid: 'b'.repeat(40) });
+    assert.equal(pending[0].signal.aborted, true);
+    pending[1].resolve(tree('current.txt'));
+    await app.send('pause');
+    pending[0].resolve(tree('stale.txt'));
+    await app.send('ready');
+    assert.deepEqual(app.state().files.map(file => file.label), ['current.txt']);
+  } finally { await app.dispose(); }
+});
+
+test('special repository entries remain inert and scrolling retains their preview', async () => {
+  const app = host({ treeFiles: ['link', 'module'], treeModes: { link: '120000', module: '160000' } });
+  try {
+    await app.open(); await app.send('resume'); await app.send('pause');
+    for (const [name, description] of [['link', /Symbolic link/], ['module', /Submodule commit/]]) {
+      await app.send('browse', { pathBase64: Buffer.from(name).toString('base64') });
+      assert.match(app.state().frame.lines[0], description);
+      await app.send('viewport', { firstLine: 6 });
+      assert.equal(app.state().activePath, name);
+      assert.match(app.state().frame.lines[0], description);
+    }
   } finally { await app.dispose(); }
 });

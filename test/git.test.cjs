@@ -135,3 +135,32 @@ test('parses zero-context hunk coordinates', async () => {
     assert.equal((await reader.readCommit(f.repo, f.empty, AbortSignal.timeout(5000))).subject, 'empty');
   } finally { await fs.rm(f.repo, { recursive: true, force: true }); }
 });
+
+test('replay tree includes unchanged files, change badges and deleted paths at the pinned commit', async () => {
+  const f = await fixture();
+  try {
+    await fs.mkdir(path.join(f.repo, 'nested'));
+    await fs.writeFile(path.join(f.repo, 'nested', 'odd\tname\n.txt'), 'unchanged\n');
+    await fs.writeFile(path.join(f.repo, 'gone.txt'), 'old\n');
+    await fs.symlink('code.txt', path.join(f.repo, 'link'));
+    f.git('add', '.'); f.git('commit', '-m', 'baseline');
+    await fs.unlink(path.join(f.repo, 'gone.txt'));
+    await fs.writeFile(path.join(f.repo, 'code.txt'), 'third\n');
+    await fs.writeFile(path.join(f.repo, 'new.bin'), Buffer.from([0, 255]));
+    f.git('add', '.'); f.git('commit', '-m', 'changes');
+    const commit = f.git('rev-parse', 'HEAD');
+    await fs.writeFile(path.join(f.repo, 'future.txt'), 'not in replay\n');
+    f.git('add', '.'); f.git('commit', '-m', 'future');
+    const files = await reader.readTree(f.repo, commit, AbortSignal.timeout(5000));
+    const byPath = new Map(files.map(file => [Buffer.from(file.pathBase64, 'base64').toString(), file]));
+    assert.equal(byPath.size, 5);
+    assert.equal(byPath.get('code.txt').change, 'M');
+    assert.equal(byPath.get('nested/odd\tname\n.txt').change, '');
+    assert.equal(byPath.get('new.bin').change, 'A');
+    assert.equal(byPath.get('gone.txt').change, 'D');
+    assert.equal(byPath.get('link').mode, '120000');
+    assert.equal(byPath.get('code.txt').oid, f.git('rev-parse', `${commit}:code.txt`));
+    assert.equal(byPath.has('future.txt'), false);
+    assert.equal(f.git('status', '--porcelain'), '');
+  } finally { await fs.rm(f.repo, { recursive: true, force: true }); }
+});

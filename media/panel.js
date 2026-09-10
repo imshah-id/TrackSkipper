@@ -70,10 +70,10 @@
         button.className = `file-button${file.label === state.activePath ? ' selected' : ''}`; button.title = file.label; button.disabled = running;
         button.style.setProperty('--depth', depth);
         const change = ({ A: 'Added', D: 'Deleted', M: 'Modified', R: 'Renamed' })[file.change] || file.change;
-        button.setAttribute('aria-current', String(file.label === state.activePath)); button.setAttribute('aria-label', `${file.label}, ${change}`);
+        button.setAttribute('aria-current', String(file.label === state.activePath)); button.setAttribute('aria-label', change ? `${file.label}, ${change}` : file.label);
         tag.className = 'file-tag'; tag.dataset.change = file.change; tag.textContent = file.change; tag.title = change;
         name.className = 'file-name'; name.textContent = file.label.split('/').pop();
-        button.append(icon(file.label), name, tag); button.addEventListener('click', () => send('browse', { offset: file.offset })); parent.append(button);
+        button.append(icon(file.label), name, tag); button.addEventListener('click', () => send('browse', file.pathBase64 ? { pathBase64: file.pathBase64 } : { offset: file.offset })); parent.append(button);
       }
     };
     const fragment = document.createDocumentFragment(); append(root, fragment, 0); $('files').replaceChildren(fragment);
@@ -324,11 +324,10 @@
         const button = document.createElement('button'), label = document.createElement('span');
         button.className = `tab${tab.label === state.activePath ? ' selected' : ''}`; label.textContent = tab.label.split('/').pop(); button.title = tab.label; button.disabled = running;
         button.setAttribute('aria-current', String(tab.label === state.activePath)); button.append(icon(tab.label), label);
-        button.addEventListener('click', () => send('browse', { offset: tab.offset })); return button;
+        button.addEventListener('click', () => send('browse', tab.pathBase64 ? { pathBase64: tab.pathBase64 } : { offset: tab.offset })); return button;
       }));
       if (!state.tabs?.length) { const tab = document.createElement('span'); tab.className = 'tab empty-tab'; tab.textContent = 'Preview'; $('tabs').append(tab); }
     }
-    $('previous-files').disabled = running || !state.previousPage; $('next-files').disabled = running || state.nextPage == null;
     renderCode(state.frame); pointer();
   }
   window.addEventListener('message', event => {
@@ -367,8 +366,6 @@
   for (const id of ['stop', 'restart', 'clear', 'follow']) $(id).addEventListener('click', () => send(id));
   const changeSpeed = () => send('speed', { charactersPerSecond: Number($('typing').value), pointerMultiplier: Number($('pointer-speed').value) });
   $('typing').addEventListener('change', changeSpeed); $('pointer-speed').addEventListener('change', changeSpeed);
-  $('previous-files').addEventListener('click', () => send('page', { offset: 0 }));
-  $('next-files').addEventListener('click', () => { if (state.nextPage != null) send('page', { offset: state.nextPage }); });
   let wheelAt = 0;
   $('code-scroll').addEventListener('wheel', event => {
     if (!state.frame || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;

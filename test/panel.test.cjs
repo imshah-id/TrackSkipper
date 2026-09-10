@@ -2,6 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { validCommand } = require('../dist/panel.js');
 test('panel accepts only bounded controls for its own session', () => {
+  assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: 'YS50cw==' }, 'one'), true);
+  assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: 'YS50cw==', offset: 0 }, 'one'), false);
+  assert.equal(validCommand({ type: 'browse', sessionId: 'one', pathBase64: '../bad' }, 'one'), false);
   assert.equal(validCommand({ type: 'pause', sessionId: 'one' }, 'one'), true);
   assert.equal(validCommand({ type: 'pause', sessionId: 'old' }, 'one'), false);
   assert.equal(validCommand({ type: 'speed', sessionId: 'one', charactersPerSecond: 24, pointerMultiplier: 1 }, 'one'), true);

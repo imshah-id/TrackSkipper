@@ -362,6 +362,31 @@ export async function* readChanges(repo: string, parentOid: string | null, commi
   }
 }
 
+export type TreeFile = { pathBase64: string; oid: string; mode: string; change: string };
+export async function readTree(repo: string, commitOid: string, signal: AbortSignal): Promise<TreeFile[]> {
+  const canonical = await root(repo, signal);
+  const commit = await readCommit(canonical, commitOid, signal);
+  const raw = await collect(canonical, ['ls-tree', '-r', '-z', '--full-tree', commit.oid], signal);
+  const files = new Map<string, TreeFile>();
+  for (let start = 0; start < raw.length;) {
+    const end = raw.indexOf(0, start), tab = raw.indexOf(9, start);
+    if (end < 0 || tab < start || tab > end) throw new Error('Invalid Git tree entry');
+    const [mode, , oid] = raw.subarray(start, tab).toString('ascii').split(' ');
+    if (!OID.test(oid)) throw new Error('Invalid Git tree object ID');
+    const pathBase64 = raw.subarray(tab + 1, end).toString('base64');
+    files.set(pathBase64, { pathBase64, oid, mode, change: '' });
+    start = end + 1;
+  }
+  for await (const change of readChanges(canonical, commit.parentOid, commit.oid, signal)) {
+    const file = files.get(change.pathBase64);
+    if (file) file.change = change.oldOid ? 'M' : 'A';
+    else if (change.oldOid) files.set(change.pathBase64, {
+      pathBase64: change.pathBase64, oid: change.oldOid, mode: change.oldMode, change: 'D',
+    });
+  }
+  return [...files.values()];
+}
+
 export async function hunkRanges(repo: string, oldOid: string, newOid: string, signal: AbortSignal): Promise<Array<{ oldLine: number; oldCount: number; newLine: number; newCount: number }>> {
   if (!OID.test(oldOid) || !OID.test(newOid)) throw new Error('Full blob IDs are required');
   const canonical = await root(repo, signal);

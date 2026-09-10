@@ -2,13 +2,13 @@ import * as vscode from 'vscode';
 import { randomBytes } from 'node:crypto';
 import { readFile, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { commitPage, disposeGit, gitText, objectInfo } from './git';
+import { commitPage, disposeGit, gitText, objectInfo, readTree, TreeFile } from './git';
 import { preparePlan, readRecords, textBlob } from './plan';
 import { createReplay, systemClock } from './replay';
 import { createTextView, frameAt } from './view';
 import { createStore, openStore, Store } from './store';
 import { panelHtml, validCommand, PanelCommand } from './panel';
-import { Checkpoint, Frame, Phase, Plan } from './types';
+import { Checkpoint, Frame, Phase, Plan, LIMITS } from './types';
 import { validateTiming } from './timing';
 import { createNativeInput } from './input';
 
@@ -20,9 +20,10 @@ export function activate(context: vscode.ExtensionContext): void {
   let preparation: AbortController | undefined, busy = false, error = '', notice = '';
   let frame: Frame | undefined, phase: Phase | undefined, phaseElapsedMs = 0, phaseDurationMs = 0;
   let browseView: ReturnType<typeof createTextView> | undefined;
-  let recent: Array<{ offset: number; label: string }> = [];
-  let filePage: Array<{ offset: number; label: string; change: string }> = [];
-  let pageOffset = 0, nextPage: number | null = null, commitStart = 0, currentCommit = '';
+  let recent: Array<{ offset?: number; pathBase64?: string; label: string }> = [];
+  let repositoryFiles: Array<TreeFile & { label: string }> = [];
+  let currentCommit = '';
+  let treeLoad: AbortController | undefined;
   let activePath = '', lastPost = 0, postTimer: NodeJS.Timeout | undefined;
   let commands = Promise.resolve();
   let opening: Promise<void> | undefined;
@@ -63,7 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
       elapsedMs: state?.position.playbackElapsedMs ?? recovery?.pausedPosition?.playbackElapsedMs ?? recovery?.playbackElapsedMs ?? 0,
       summary: plan?.summary, recordNumber: (state?.record?.ordinal ?? -1) + 1, recordCount: plan?.totals.records ?? 0,
       nativeStatus, subject: state?.record?.subject ?? '', frame, phase, phaseElapsedMs, phaseDurationMs,
-      files: filePage, previousPage: pageOffset > commitStart, nextPage, tabs: recent, activePath, editor });
+      files: repositoryFiles.map(({ pathBase64, label, change }) => ({ pathBase64, label, change })), tabs: recent, activePath, editor });
   }
   function report(cause: unknown): void { error = cause instanceof Error ? cause.message : String(cause); if (!panel) void vscode.window.showErrorMessage(error); send(true); }
 
@@ -149,18 +150,17 @@ export function activate(context: vscode.ExtensionContext): void {
     await selectRepository(repository.id);
   }
 
-  async function page(offset: number): Promise<void> {
+  async function loadFiles(): Promise<void> {
     if (!plan) return;
-    const activePlan = plan, commit = currentCommit;
-    const rows: typeof filePage = []; let next: number | null = null;
-    for await (const entry of readRecords(activePlan, offset, new AbortController().signal)) {
-      if (entry.record.kind === 'milestone' || entry.record.change.commitOid !== commit) break;
-      if (rows.length === 100) { next = entry.offset; break; }
-      const change = entry.record.change;
-      rows.push({ offset: entry.offset, label: label(change.pathBase64), change: !change.newOid ? 'D' : !change.oldOid ? 'A' : 'M' });
-    }
-    if (plan !== activePlan || currentCommit !== commit || offset < commitStart || !rows.length && offset !== commitStart) return;
-    filePage = rows; pageOffset = offset; nextPage = next; send();
+    treeLoad?.abort();
+    const activePlan = plan, commit = currentCommit, controller = new AbortController();
+    treeLoad = controller;
+    try {
+      const files = await readTree(activePlan.repo, commit, controller.signal);
+      if (plan !== activePlan || currentCommit !== commit || controller.signal.aborted) return;
+      repositoryFiles = files.map(file => ({ ...file, label: label(file.pathBase64) }));
+      send(true);
+    } catch (cause) { if (!controller.signal.aborted && plan === activePlan && currentCommit === commit) report(cause); }
   }
 
   function attachReplay(): void {
@@ -185,7 +185,7 @@ export function activate(context: vscode.ExtensionContext): void {
         browseView = undefined;
         const offset = replay!.getState().position.recordOffset;
         const oid = record.kind === 'milestone' ? record.commitOid : record.change.commitOid;
-        if (oid !== currentCommit) { currentCommit = oid; commitStart = offset; filePage = []; void page(offset).catch(report); }
+        if (oid !== currentCommit) { currentCommit = oid; repositoryFiles = []; void loadFiles(); }
         if (record.kind !== 'milestone') {
           activePath = label(record.change.pathBase64);
           recent = [{ offset, label: activePath }, ...recent.filter(item => item.label !== activePath)].slice(0, 5);
@@ -218,11 +218,11 @@ export function activate(context: vscode.ExtensionContext): void {
       await candidateStore.refreshUsage();
       abort.signal.throwIfAborted();
       preparation = undefined; notice = 'Starting replay…'; send(true);
-      await replay?.dispose(); replay = undefined;
+      treeLoad?.abort(); await replay?.dispose(); replay = undefined;
       if (store) await store.clear();
       store = candidateStore; plan = candidatePlan; candidateStore = undefined;
       await context.globalState.update('sessionRoot', store.root);
-      recovery = null; frame = undefined; recent = []; filePage = []; currentCommit = ''; activePath = ''; browseView = undefined;
+      recovery = null; frame = undefined; recent = []; repositoryFiles = []; currentCommit = ''; activePath = ''; browseView = undefined;
       notice = `${plan.summary?.commits} commits · ${plan.summary?.animated} animated files · ${plan.summary?.snapshots} snapshot events.`;
       attachReplay(); await replay!.start();
     } catch (cause) { await candidateStore?.clear(); throw cause; }
@@ -258,7 +258,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }
     if (command.type === 'stop') await replay?.stop();
     if (command.type === 'restart') {
-      await replay?.dispose(); await store.reset(); recovery = null; frame = undefined; currentCommit = ''; recent = []; filePage = [];
+      treeLoad?.abort(); await replay?.dispose(); await store.reset(); recovery = null; frame = undefined; currentCommit = ''; recent = []; repositoryFiles = [];
       attachReplay(); await replay!.start();
     }
     if (command.type === 'speed') await replay?.setSpeed(command.charactersPerSecond!, command.pointerMultiplier!);
@@ -267,19 +267,25 @@ export function activate(context: vscode.ExtensionContext): void {
       else replay?.setViewport(command.firstLine!);
     }
     if (command.type === 'follow') { browseView = undefined; replay?.follow(); }
-    if (command.type === 'page') {
-      let offset = command.offset!;
-      if (offset === 0 && pageOffset > commitStart) {
-        let start = commitStart, previous = commitStart, count = 0;
-        for await (const entry of readRecords(plan, commitStart, new AbortController().signal)) {
-          if (entry.offset >= pageOffset) break;
-          if (count++ % 100 === 0) { previous = start; start = entry.offset; }
-        }
-        offset = start < pageOffset ? start : previous;
+    if (command.type === 'browse' && command.pathBase64 && replay?.getState().status !== 'running') {
+      const file = repositoryFiles.find(file => file.pathBase64 === command.pathBase64);
+      if (!file) return;
+      const signal = new AbortController().signal;
+      let text = '', reason = '';
+      if (file.mode === '160000') reason = `Submodule commit ${file.oid}`;
+      else if (file.mode === '120000') reason = 'Symbolic link';
+      else if ((await objectInfo(plan.repo, file.oid, signal)).size > LIMITS.textBytes) reason = 'File exceeds 1 MiB';
+      else {
+        try { text = await textBlob(plan.repo, file.oid, signal); }
+        catch (cause) { if (!(cause instanceof TypeError)) throw cause; reason = 'Non-UTF-8 file'; }
+        if (text.includes('\0')) reason = 'Binary file';
       }
-      await page(offset);
+      activePath = file.label;
+      browseView = createTextView('', reason || text);
+      frame = frameAt(browseView, 0, browseView.newText.length, 0, 120);
+      recent = [{ pathBase64: file.pathBase64, label: activePath }, ...recent.filter(item => item.label !== activePath)].slice(0, 5);
     }
-    if (command.type === 'browse' && replay?.getState().status !== 'running') {
+    if (command.type === 'browse' && command.offset !== undefined && replay?.getState().status !== 'running') {
       for await (const entry of readRecords(plan, command.offset!, new AbortController().signal)) {
         if (entry.record.kind === 'milestone') break;
         activePath = label(entry.record.change.pathBase64);
@@ -293,8 +299,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
     if (command.type === 'clear') {
-      await replay?.dispose(); replay = undefined; await store.clear(); store = undefined; plan = undefined; recovery = null;
-      frame = undefined; filePage = []; recent = []; notice = ''; currentCommit = ''; activePath = '';
+      treeLoad?.abort(); await replay?.dispose(); replay = undefined; await store.clear(); store = undefined; plan = undefined; recovery = null;
+      frame = undefined; repositoryFiles = []; recent = []; notice = ''; currentCommit = ''; activePath = '';
       browseView = undefined;
       await context.globalState.update('sessionRoot', undefined);
     }
@@ -357,7 +363,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }));
   shutdown = async () => {
     native.stop(); preparation?.abort(); if (postTimer) clearTimeout(postTimer);
-    await replay?.pause(); await replay?.dispose(); await disposeGit();
+    await replay?.pause(); treeLoad?.abort(); await replay?.dispose(); await disposeGit();
   };
 }
 export async function deactivate(): Promise<void> { await shutdown?.(); shutdown = undefined; }
