@@ -221,6 +221,23 @@
       if (column >= 0 && !inserted) { const caret = document.createElement('span'); caret.className = 'caret'; children.push(caret); }
       item.content.replaceChildren(...children);
     });
+    revealTypingCaret();
+  }
+  function revealTypingCaret() {
+    if (state.status !== 'running' || !['type', 'delete'].includes(state.phase?.kind) || state.frame?.viewportLine === undefined) return;
+    const caret = $('code').querySelector('.caret');
+    if (!caret || !$('setup').hidden || $('code-scroll').hidden) return;
+    const top = $('code-scroll').getBoundingClientRect().top + 4;
+    const bottom = top + $('code-scroll').clientHeight - 8;
+    let rect = caret.getBoundingClientRect();
+    if (rect.top >= top && rect.bottom <= bottom) return;
+    scrollAnimation?.finish();
+    rect = caret.getBoundingClientRect();
+    const correction = rect.top < top ? top - rect.top : rect.bottom > bottom ? bottom - rect.bottom : 0;
+    if (correction) {
+      const offset = new DOMMatrixReadOnly(getComputedStyle($('code')).transform).m42;
+      $('code').style.transform = `translateY(${offset + correction}px)`;
+    }
   }
   let nativeArmed = false, nativeRequested = false, nativeTimer, nativeQuietUntil = 0, lastNativeStatus = 'Off';
   function nativeStatus() {
@@ -431,7 +448,7 @@
     const key = `${sessionId}:${rows}`;
     if (Number.isFinite(rows) && key !== viewportKey) { viewportKey = key; send('viewportSize', { rows }); }
   };
-  new ResizeObserver(reportViewportSize).observe($('code-scroll'));
+  new ResizeObserver(() => { reportViewportSize(); revealTypingCaret(); }).observe($('code-scroll'));
   $('tabs').addEventListener('wheel', event => {
     if (!event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY) || $('tabs').scrollWidth <= $('tabs').clientWidth) return;
     event.preventDefault(); $('tabs').scrollLeft += event.deltaY;

@@ -178,6 +178,19 @@ async function main() {
     assert.equal(await scrollY(), -528, 'the VM input overlay does not prevent auto-scroll');
     assert.equal(await evaluate("document.querySelector('#native-pad').getBoundingClientRect().top===document.querySelector('#code-scroll').getBoundingClientRect().top"), true, 'the input surface stays fixed while code scrolls');
     await settle("document.querySelector('#native-enabled').click()");
+    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 320, deviceScaleFactor: 1, mobile: false });
+    await settle("pushState({...fixturePlayback,frame:{...scrollFrame,viewportLine:20,caret:{row:44,column:0}},phase:{...fixturePlayback.phase,kind:'type'}})");
+    const typingVisible = () => evaluate("(()=>{const caret=document.querySelector('.caret').getBoundingClientRect(),view=document.querySelector('#code-scroll');return caret.top>=view.getBoundingClientRect().top&&caret.bottom<=view.getBoundingClientRect().top+view.clientHeight})()");
+    assert.equal(await typingVisible(), true, 'typing is visible immediately while the host still has the old editor height');
+    for (let row = 45; row < 54; row++) {
+      await settle(`pushState({...fixturePlayback,frame:{...scrollFrame,viewportLine:${row-4},caret:{row:${row},column:0}},phase:{...fixturePlayback.phase,kind:'type'}})`);
+      assert.equal(await typingVisible(), true, 'each new line stays visible even before the scroll animation finishes');
+    }
+    await screenshot('playback-typing-short.png');
+    await settle("document.querySelector('#native-enabled').click();pushState({...fixturePlayback,frame:{...scrollFrame,viewportLine:20,caret:{row:60,column:0}},phase:{...fixturePlayback.phase,kind:'type'}})");
+    assert.equal(await typingVisible(), true, 'the current typing line remains visible with the VM overlay');
+    await settle("document.querySelector('#native-enabled').click()");
+    await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 850, deviceScaleFactor: 1, mobile: false });
     await settle('pushState(fixturePlayback)');
     const dartPath = 'lib/features/dashboard/dashboard_shell.dart';
     const dartLines = ['class DashboardPage extends StatelessWidget {', '  final String title = "Dashboard";', '  @override', '  Widget build(BuildContext context) => const SizedBox(height: 24);', '}'];

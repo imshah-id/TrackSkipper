@@ -120,6 +120,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   }
 
   function firstVisibleLine(caretLine: number): number {
+    if (status === 'running' && ['type', 'delete'].includes(current()?.phase.kind ?? '')) viewport = undefined;
     if (viewport !== undefined) return viewport;
     const margin = Math.min(4, Math.floor((viewportRows - 1) / 3));
     const from = scrollFrom ?? followLine;
@@ -223,6 +224,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
       position.phaseElapsedMs += advance; position.playbackElapsedMs += advance; budget -= advance;
       updateBoundaries();
       if (position.phaseElapsedMs + 1e-7 < item.duration) break;
+      if (phaseView && ['type', 'delete'].includes(item.phase.kind)) firstVisibleLine(lineAt(phaseView.newLineStarts, newBoundary));
       if (item.phase.kind === 'save' && record.kind !== 'milestone') await events.save(record, cancellation.signal);
       position.phaseIndex++; position.phaseElapsedMs = 0; initializePhase();
       if (budget <= 0 && current()?.duration) break;

@@ -224,3 +224,41 @@ test('following keeps nearby lines still, adapts to the viewport, and respects m
     assert.equal(visibleLine(), finalViewport, 'completion does not jump to the end of the file');
   } finally { await controller.dispose(); }
 });
+
+test('typing keeps its current line in a short viewport after manual scrolling and resume', async () => {
+  const text = 'x\n'.repeat(180);
+  const record = { kind: 'text', change: { oldOid: null, newOid: 'new' }, weight: 1,
+    edits: [{ oldStart: 0, oldEnd: 0, newStart: 0, newEnd: text.length, deleteUnits: 0, insertUnits: text.length }],
+    phases: [{ kind: 'type', target: 'code', editIndex: 0, units: text.length, minimumMs: 0, preferredMs: 1800 },
+      { kind: 'save', target: 'file', editIndex: null, units: 0, minimumMs: 0, preferredMs: 0 }] };
+  const exported = {};
+  require('node:vm').runInNewContext(require('node:fs').readFileSync(require.resolve('../dist/replay.js'), 'utf8'), {
+    exports: exported, Buffer, performance, setTimeout, clearTimeout, AbortController,
+    require: name => name === './plan' ? { textBlob: async (_, oid) => oid ? text : '', readRecords: async function* () { yield { record, offset: 0, nextOffset: 1 }; } }
+      : require(require('node:path').resolve(__dirname, '../dist', name)),
+  });
+  let now = 0, timer, frame;
+  const replay = exported.createReplay({ timing: { mode: 'speed', charactersPerSecond: 200, pointerMultiplier: 1 }, totals: { minimumMs: 0, preferredMs: 1800, weight: 1, records: 1 } },
+    { now: () => now, wallNow: () => now, schedule: (callback, delay) => { timer = { callback, delay }; }, cancel() { timer = undefined; } },
+    { frame: value => frame = value, progress() {}, save: async () => {}, checkpoint: async () => {}, error: message => assert.fail(message) });
+  const assertVisible = () => {
+    assert.ok(frame.caret, 'the current line is in the rendered buffer');
+    const row = frame.firstLine + frame.caret.row - frame.viewportLine;
+    assert.ok(row >= 0 && row < 5, `caret row ${row} must fit in the five-line editor at ${now}ms (${replay.getState().status}, viewport ${frame.viewportLine})`);
+  };
+  try {
+    replay.setViewportRows(5); await replay.start();
+    for (let step = 0; timer; step++) {
+      const pending = timer; timer = undefined; now += pending.delay; await pending.callback();
+      assertVisible();
+      if (step === 5) {
+        replay.setViewport(0); assertVisible();
+        await replay.pause(); replay.setViewport(0);
+        assert.equal(frame.firstLine, 0, 'paused browsing stays where the user scrolled');
+        assert.equal(frame.viewportLine, undefined);
+        replay.resume(); assertVisible();
+      }
+    }
+    assert.equal(replay.getState().status, 'complete');
+  } finally { await replay.dispose(); }
+});
