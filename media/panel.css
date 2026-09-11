@@ -151,7 +151,7 @@ body.vscode-light .file-icon[data-kind=css] { color: #8629b3 }
 .controls-hidden :is(#controls-label, .fullscreen-label) { display: none }
 .controls-hidden .editor-actions button { width: 24px; height: 22px; min-height: 0; padding: 3px }
 .editor-empty { flex: 1; display: grid; place-items: center; color: var(--muted) }
-.code-scroll { flex: 1; min-height: 0; overflow: auto; position: relative }
+.code-scroll { flex: 1; min-height: 0; overflow: auto; overflow-y: hidden; position: relative }
 .code { width: max-content; min-width: 100%; padding: 4px 0 24px; font: var(--code-size)/var(--line-height) var(--mono); font-weight: var(--code-weight, normal); tab-size: var(--tab-size, 4); color: var(--vscode-editor-foreground, var(--text)) }
 .code-row { display: flex; min-height: var(--line-height); white-space: pre }
 .code-row.active { background: var(--vscode-editor-lineHighlightBackground, transparent); outline: 1px solid var(--vscode-editor-lineHighlightBorder, var(--border)); outline-offset: -1px }

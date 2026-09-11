@@ -49,6 +49,7 @@ export type Checkpoint = {
 };
 export type Frame = {
   firstLine: number; lines: string[];
+  viewportLine?: number;
   caret: { row: number; column: number } | null;
 };
 export const LIMITS = {

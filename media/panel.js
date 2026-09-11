@@ -166,12 +166,30 @@
     return { row, number, content, key: '', tokenKey: '', parsed: null };
   });
   $('code').append(...rows.map(item => item.row));
-  let codePath = '', codeFirstLine = -1;
+  let codePath = '', codeFirstLine = -1, codeViewport = -1, codeSession = '', scrollAnimation;
   function renderCode(frame) {
-    if (!frame) return;
+    if (!frame) { scrollAnimation?.cancel(); codeViewport = -1; return; }
+    const code = $('code'), lineHeight = parseFloat(getComputedStyle(code).lineHeight);
+    const viewport = frame.viewportLine ?? frame.firstLine;
+    if (codeViewport !== viewport || codeFirstLine !== frame.firstLine || codePath !== state.activePath || codeSession !== sessionId) {
+      const previous = codeFirstLine - new DOMMatrixReadOnly(getComputedStyle(code).transform).m42 / lineHeight;
+      scrollAnimation?.cancel();
+      const target = -(viewport - frame.firstLine) * lineHeight;
+      code.style.transform = `translateY(${target}px)`;
+      if (codeViewport >= 0 && codePath === state.activePath && codeSession === sessionId && !motion.matches && !document.hidden) {
+        const visibleRows = Math.max(1, Math.floor(($('code-scroll').clientHeight - 8) / lineHeight));
+        const lastStart = Math.max(viewport, frame.firstLine + frame.lines.length - visibleRows);
+        const from = Math.max(frame.firstLine, Math.min(previous, lastStart));
+        scrollAnimation = code.animate([{ transform: `translateY(${-(from - frame.firstLine) * lineHeight}px)` }, { transform: `translateY(${target}px)` }],
+          { duration: state.phase?.kind === 'scroll' ? 100 : 280, easing: 'ease-out' });
+      }
+    }
+    if (motion.matches || state.status !== 'running') scrollAnimation?.finish();
+    // Recompute the resting offset when editor typography changes too.
+    code.style.transform = `translateY(${-(viewport - frame.firstLine) * lineHeight}px)`;
     if (codePath !== state.activePath) $('code-scroll').scrollLeft = 0;
     if (codePath !== state.activePath || codeFirstLine !== frame.firstLine) $('code-scroll').scrollTop = 0;
-    codePath = state.activePath; codeFirstLine = frame.firstLine;
+    codePath = state.activePath; codeFirstLine = frame.firstLine; codeViewport = viewport; codeSession = sessionId;
     const language = state.activePath?.split('.').pop().toLowerCase() || ''; let block = false;
     rows.forEach((item, index) => {
       item.row.hidden = index >= frame.lines.length; if (item.row.hidden) return;
@@ -419,17 +437,19 @@
   }, { passive: false });
   let wheelAt = 0;
   $('code-scroll').addEventListener('wheel', event => {
-    if (!state.frame || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
+    if (!state.frame || !event.deltaY || Math.abs(event.deltaY) < Math.abs(event.deltaX)) return;
     event.preventDefault(); if (performance.now() - wheelAt < 100) return; wheelAt = performance.now();
-    send('viewport', { firstLine: Math.max(0, state.frame.firstLine + Math.sign(event.deltaY) * 6) });
+    scrollAnimation?.finish();
+    send('viewport', { firstLine: Math.max(0, (state.frame.viewportLine ?? state.frame.firstLine) + Math.sign(event.deltaY) * 6) });
   }, { passive: false });
   $('code-scroll').addEventListener('keydown', event => {
     if (!['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp'].includes(event.key) || !state.frame) return;
     event.preventDefault(); const amount = event.key.includes('Page') ? 40 : 1;
-    send('viewport', { firstLine: Math.max(0, state.frame.firstLine + (/Down$/.test(event.key) ? amount : -amount)) });
+    scrollAnimation?.finish();
+    send('viewport', { firstLine: Math.max(0, (state.frame.viewportLine ?? state.frame.firstLine) + (/Down$/.test(event.key) ? amount : -amount)) });
   });
   document.addEventListener('visibilitychange', () => { if (document.hidden) stopPointer(); else { phaseKey = ''; pointer(); } });
-  motion.addEventListener('change', () => { phaseKey = ''; pointer(); });
+  motion.addEventListener('change', () => { if (motion.matches) scrollAnimation?.finish(); phaseKey = ''; pointer(); });
   window.addEventListener('resize', () => { phaseKey = ''; pointer(); });
   $('hours').value = draft.hours ?? '6'; $('setup-typing').value = draft.typing ?? '24'; $('setup-pointer').value = draft.pointer ?? '1'; $('commit-search').value = draft.search ?? '';
   setTimingMode(draft.timingMode === 'speed' ? 'speed' : 'duration'); updateTiming(); renderControls();

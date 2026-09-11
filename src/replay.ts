@@ -41,7 +41,8 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   let timer: unknown, pending = Promise.resolve();
   let visible = true, lastTime = 0, lastWall = 0, delay = 0, lastFrameTime = -Infinity;
   let oldBoundary = 0, newBoundary = 0, viewport: number | undefined;
-  let viewportRows = 30, followLine = 0;
+  let viewportRows = 30, followLine = 0, windowLine = 0;
+  let scrollFrom: number | undefined;
   let phaseView: TextView | undefined, deletionView: TextView | undefined, deletionEdit = -1;
   let stepOffsets = new Uint32Array(0), stepBeats = new Float64Array(0), consumed = 0, totalBeats = 0;
   let totalMs = timing.mode === 'duration' ? timing.durationMs : plan.totals.preferredMs;
@@ -85,6 +86,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   function initializePhase(): void {
     stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0); consumed = 0; totalBeats = 0; phaseView = view;
     const phase = current()?.phase;
+    if (phase?.kind === 'scroll') scrollFrom = followLine;
     if (!phase || !view || record?.kind !== 'text') return;
     if (phase.editIndex !== null) {
       const edit = record.edits[phase.editIndex];
@@ -120,10 +122,29 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
   function firstVisibleLine(caretLine: number): number {
     if (viewport !== undefined) return viewport;
     const margin = Math.min(4, Math.floor((viewportRows - 1) / 3));
-    if (caretLine < followLine + margin || caretLine >= followLine + viewportRows - margin) {
-      followLine = Math.max(0, caretLine - Math.floor(viewportRows / 3));
-    }
+    const from = scrollFrom ?? followLine;
+    const target = caretLine < from + margin || caretLine >= from + viewportRows - margin
+      ? Math.max(0, caretLine - Math.floor(viewportRows / 3)) : from;
+    const item = current();
+    const t = item?.phase.kind === 'scroll' && item.duration ? Math.min(1, position.phaseElapsedMs / item.duration) : 1;
+    followLine = Math.round(from + (target - from) * t * t * (3 - 2 * t));
+    if (t === 1) scrollFrom = undefined;
     return followLine;
+  }
+
+  function visibleFrame(model: TextView, oldEnd: number, newEnd: number, firstLine: number): Frame {
+    if (viewport !== undefined) return frameAt(model, oldEnd, newEnd, firstLine, LIMITS.frameRows);
+    const padding = Math.floor((LIMITS.frameRows - viewportRows) / 2);
+    if (firstLine < windowLine || firstLine + viewportRows > windowLine + LIMITS.frameRows) {
+      windowLine = Math.max(0, firstLine - padding);
+    }
+    let frame = frameAt(model, oldEnd, newEnd, windowLine, LIMITS.frameRows);
+    if (firstLine >= frame.firstLine + frame.lines.length) {
+      windowLine = firstLine;
+      frame = frameAt(model, oldEnd, newEnd, windowLine, LIMITS.frameRows);
+    }
+    frame.viewportLine = Math.max(frame.firstLine, Math.min(firstLine, frame.firstLine + frame.lines.length - 1));
+    return frame;
   }
 
   function emit(force = false): void {
@@ -133,7 +154,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     let frame: Frame;
     if (phaseView) {
       const firstLine = item.phase.kind === 'save' ? viewport ?? followLine : firstVisibleLine(lineAt(phaseView.newLineStarts, newBoundary));
-      frame = frameAt(phaseView, oldBoundary, newBoundary, firstLine, LIMITS.frameRows);
+      frame = visibleFrame(phaseView, oldBoundary, newBoundary, firstLine);
     } else frame = { firstLine: 0, lines: [record?.kind === 'milestone' ? 'No file changes in this commit.' : (record as FileRecord | undefined)?.reason ?? 'Saving exact file bytes.'], caret: null };
     lastFrameTime = clock.now(); events.frame(frame, item.phase, position.phaseElapsedMs, item.duration);
   }
@@ -143,13 +164,13 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     if (next.done) {
       if (visible && view && record) {
         const firstLine = viewport ?? followLine;
-        events.frame(frameAt(view, view.oldText.length, view.newText.length, firstLine, LIMITS.frameRows), record.phases.at(-1)!, 0, 0);
+        events.frame(visibleFrame(view, view.oldText.length, view.newText.length, firstLine), record.phases.at(-1)!, 0, 0);
       }
       record = undefined; view = phaseView = deletionView = undefined; schedule = [];
       stepOffsets = new Uint32Array(0); stepBeats = new Float64Array(0); return false;
     }
     record = next.value.record; nextOffset = next.value.nextOffset; position.recordOffset = next.value.offset;
-    schedule = makeSchedule(record); viewport = undefined; followLine = 0; view = undefined; deletionView = undefined; deletionEdit = -1; oldBoundary = 0; newBoundary = 0;
+    schedule = makeSchedule(record); viewport = undefined; followLine = windowLine = 0; scrollFrom = undefined; view = undefined; deletionView = undefined; deletionEdit = -1; oldBoundary = 0; newBoundary = 0;
     if (record.kind === 'text') view = createTextView(await textBlob(plan.repo, record.change.oldOid, cancellation.signal), await textBlob(plan.repo, record.change.newOid, cancellation.signal));
     if (!Number.isSafeInteger(position.phaseIndex) || position.phaseIndex >= schedule.length || position.phaseIndex < 0
       || position.phaseElapsedMs < 0 || !Number.isFinite(position.phaseElapsedMs)
@@ -240,7 +261,7 @@ export function createReplay(plan: Plan, clock: Clock, events: ReplayEvents) {
     setVisible(value: boolean): void { visible = value; if (value) emit(true); },
     setViewport(firstLine: number): void { if (Number.isSafeInteger(firstLine) && firstLine >= 0) { viewport = firstLine; emit(true); } },
     setViewportRows(rows: number): void { if (Number.isSafeInteger(rows) && rows >= 1 && rows <= LIMITS.frameRows) { viewportRows = rows; emit(true); } },
-    follow(): void { viewport = undefined; emit(true); },
+    follow(): void { viewport = undefined; scrollFrom = undefined; emit(true); },
     async setSpeed(charactersPerSecond: number, pointerMultiplier: number): Promise<void> {
       if (status !== 'paused' || timing.mode !== 'speed') throw new Error('Pause a fixed-speed replay before changing speed');
       const next: Timing = { mode: 'speed', charactersPerSecond, pointerMultiplier }; validateTiming(next);

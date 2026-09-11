@@ -175,9 +175,9 @@ test('pause during a durable save recovers, and invalid checkpoints cannot skip 
 });
 
 test('following keeps nearby lines still, adapts to the viewport, and respects manual scrolling', async () => {
-  const text = Array.from({ length: 90 }, (_, i) => `line ${i}`).join('\n');
-  const phases = [10, 11, 12, 60].map(editIndex => ({ kind: 'hover', target: 'code', editIndex, units: 0, minimumMs: 0, preferredMs: 1000 }));
-  const edits = Array.from({ length: 90 }, (_, line) => {
+  const text = Array.from({ length: 240 }, (_, i) => `line ${i}`).join('\n');
+  const phases = [10, 11, 12, 160, 160, 5, 5].map((editIndex, index) => ({ kind: [3, 5].includes(index) ? 'scroll' : 'hover', target: 'code', editIndex, units: 0, minimumMs: 0, preferredMs: 1000 }));
+  const edits = Array.from({ length: 240 }, (_, line) => {
     const start = text.indexOf(`line ${line}`);
     return { oldStart: start, oldEnd: start, newStart: start, newEnd: start, deleteUnits: 0, insertUnits: 0 };
   });
@@ -194,18 +194,33 @@ test('following keeps nearby lines still, adapts to the viewport, and respects m
     { frame: value => frame = value, progress() {}, save: async () => {}, checkpoint: async () => {}, error: message => assert.fail(message) });
   try {
     await controller.start();
-    const firstLine = frame.firstLine;
-    for (let i = 0; i < 2; i++) { now += timer.delay; await timer.callback(); assert.equal(frame.firstLine, firstLine); }
-    now += timer.delay; await timer.callback();
-    assert.ok(frame.firstLine > firstLine, 'a distant edit brings its surrounding code into view');
+    const step = async () => { now += timer.delay; await timer.callback(); };
+    const visibleLine = () => frame.viewportLine ?? frame.firstLine;
+    const caretRow = () => frame.firstLine + frame.caret.row - visibleLine();
+    const firstLine = visibleLine();
+    for (let i = 0; i < 2; i++) { await step(); assert.equal(visibleLine(), firstLine); }
+    await step();
+    assert.equal(visibleLine(), firstLine, 'entering a scroll phase does not teleport to the next edit');
+    await step(); const intermediate = visibleLine();
+    assert.ok(intermediate > firstLine && intermediate < 150, 'scrolling passes through the intervening code');
+    await step(); assert.ok(visibleLine() > intermediate && visibleLine() < 150);
+    await step(); assert.equal(visibleLine(), 150, 'the edit is in view before pointer movement and typing');
+    assert.ok(frame.lines.length <= 120, 'scroll buffering remains bounded');
     controller.setViewportRows(8);
-    assert.ok(frame.caret.row < 8, 'the caret fits in a short editor');
+    assert.ok(caretRow() >= 0 && caretRow() < 8, 'the caret fits in a short editor');
     controller.setViewport(0); controller.setViewportRows(12);
     assert.equal(frame.firstLine, 0, 'resizing respects a manually chosen viewport');
     controller.follow();
-    assert.ok(frame.caret.row < 12);
-    const finalViewport = frame.firstLine;
-    now += timer.delay; await timer.callback();
-    assert.equal(frame.firstLine, finalViewport, 'completion does not jump to the end of the file');
+    assert.ok(caretRow() >= 0 && caretRow() < 12);
+    const distantViewport = visibleLine();
+    await step(); await step();
+    assert.ok(visibleLine() < distantViewport && visibleLine() > 1, 'upward scrolling also moves progressively');
+    controller.setViewport(30); await step();
+    assert.equal(visibleLine(), 30, 'manual scrolling holds even during an automatic scroll phase');
+    await step(); controller.follow();
+    assert.ok(caretRow() >= 0 && caretRow() < 12);
+    const finalViewport = visibleLine();
+    await step();
+    assert.equal(visibleLine(), finalViewport, 'completion does not jump to the end of the file');
   } finally { await controller.dispose(); }
 });
