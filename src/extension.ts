@@ -374,7 +374,11 @@ export function activate(context: vscode.ExtensionContext): void {
       if (value.type === 'nativeInput') {
         if (value.action === 'stop') { native.stop(); return; }
         if (!panel?.active || !panel.visible || !vscode.window.state.focused || !vscode.workspace.isTrusted
-          || busy || replay?.getState().status !== 'running' || Date.now() - value.at! < 0 || Date.now() - value.at! > 250) { native.stop(); return; }
+          || busy || replay?.getState().status !== 'running') { native.stop(); return; }
+        if (Date.now() - value.at! < 0 || Date.now() - value.at! > 250) {
+          if (value.action === 'arm') native.stop('Waiting · input heartbeat delayed');
+          return;
+        }
         if (value.action === 'arm') native.start();
         else native.pulse(replay.getState().phase?.kind ?? 'wait', value.at!);
         return;

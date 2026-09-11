@@ -18,6 +18,7 @@ export function createNativeInput(script: string, python: string, notify: (statu
   return {
     stop,
     start(): void {
+      if (child) return;
       stop('Starting…');
       const process = spawn(python, ['-I', '-u', script], { windowsHide: true, shell: false });
       child = process;
@@ -46,7 +47,9 @@ export function createNativeInput(script: string, python: string, notify: (statu
     },
     pulse(kind: string, at: number): void {
       if (!child || !ready || pending) return;
-      if (!Number.isFinite(at) || Date.now() - at < 0 || Date.now() - at > 250) { stop('Input heartbeat expired.'); return; }
+      if (!Number.isFinite(at)) { stop('Invalid input heartbeat.'); return; }
+      // Drop delayed VM requests without restarting a healthy helper or replaying a backlog.
+      if (Date.now() - at < 0 || Date.now() - at > 250) return;
       if (!['type', 'delete', 'move', 'click', 'hover', 'scroll', 'wait', 'save'].includes(kind)) return;
       // Idle phases still verify the field but do not produce input.
       if (armed && !['type', 'delete', 'move', 'click'].includes(kind)) return;

@@ -101,6 +101,10 @@ async function main() {
     assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'arm');
     await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");
     await screenshot('playback-native-input.png');
+    const stopsBeforeScroll = await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='stop').length");
+    await settle("for(const id of ['files','tabs','code-scroll'])document.querySelector('#'+id).dispatchEvent(new Event('scroll'))");
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='stop').length"), stopsBeforeScroll, 'automatic playback scrolling must not cycle VM input');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), true);
     const padText = await evaluate("document.querySelector('#native-pad').value");
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, text: 'a' });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65 });
@@ -132,6 +136,9 @@ async function main() {
     assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), resumedArms + 1, 'returning to the hidden-controls preview resumes input without re-enabling');
     await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");
     const beforeRetry = await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length");
+    await settle("document.querySelector('#native-pad').dispatchEvent(new WheelEvent('wheel',{deltaY:100,bubbles:true,cancelable:true}))");
+    assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput').at(-1).action"), 'stop', 'user scrolling still suspends VM input');
+    assert.equal(await evaluate("document.querySelector('#native-enabled').checked"), true, 'user scrolling keeps the mode enabled');
     await evaluate("(async()=>{for(let i=0;i<13;i++){pushState({...fixturePlayback,nativeStatus:'Waiting · return to the replay preview'});await new Promise(resolve=>setTimeout(resolve,100));}})()");
     assert.equal(await evaluate("commands.filter(command=>command.type==='nativeInput' && command.action==='arm').length"), beforeRetry + 1, 'routine frames cannot postpone recovery forever');
     await settle("pushState({...fixturePlayback,nativeStatus:'Armed · Escape to stop'})");

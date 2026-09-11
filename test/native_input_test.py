@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import pathlib
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 path = pathlib.Path(__file__).parents[1] / 'native' / 'input.py'
 spec = importlib.util.spec_from_file_location('native_input', path)
@@ -19,6 +21,22 @@ class Backend:
     def emit(self, kind, position): self.events.append((kind, position))
 
 class SafetyTest(unittest.TestCase):
+    def test_delayed_vm_pulses_are_dropped_without_restarting_the_guard(self):
+        backend = Backend()
+        requests = [{'op': 'arm', 'at': 100000},
+                    {'op': 'pulse', 'kind': 'type', 'at': 99000},
+                    {'op': 'pulse', 'kind': 'type', 'at': 100000}]
+        source = io.BytesIO(('\n'.join(module.json.dumps(request) for request in requests) + '\n').encode())
+        output = io.StringIO()
+        with patch.object(module.sys, 'platform', 'win32'), patch.object(module, 'Windows', return_value=backend) as windows, \
+                patch.object(module.sys, 'stdin', SimpleNamespace(buffer=source)), patch.object(module.sys, 'stdout', output), \
+                patch.object(module.time, 'time', return_value=100):
+            module.main()
+        self.assertEqual(windows.call_count, 1)
+        self.assertEqual(backend.events, [('type', (100, 100))], 'the expired event is never sent')
+        self.assertEqual([module.json.loads(line)['status'] for line in output.getvalue().splitlines()],
+                         ['ready', 'armed', 'armed', 'armed'])
+
     def test_input_requires_fresh_arm_and_unchanged_target(self):
         self.assertTrue(hasattr(module, 'Guard'), 'native input guard must exist')
         backend = Backend()
@@ -111,7 +129,7 @@ class MacFocusTest(unittest.TestCase):
         with patch.object(module.time, 'time', return_value=100):
             guard.handle({'op': 'arm', 'at': 100000})
         with patch.object(module.time, 'time', side_effect=[100, 101]):
-            with self.assertRaisesRegex(ValueError, 'expired'):
+            with self.assertRaisesRegex(module.InputExpired, 'expired'):
                 guard.handle({'op': 'pulse', 'kind': 'click', 'at': 100000})
         self.assertEqual(backend.events, [])
 

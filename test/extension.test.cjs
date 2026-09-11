@@ -431,6 +431,11 @@ test('native input requires a fresh request, active panel, focused window, and r
     await app.send('resume');
     await input('arm'); await input('pulse');
     assert.deepEqual(app.nativeCalls.slice(-2), ['arm', 'type']);
+    const beforeDelayedPulse = app.nativeCalls.length;
+    await app.send('nativeInput', { action: 'pulse', at: Date.now() - 1000 });
+    assert.equal(app.nativeCalls.length, beforeDelayedPulse, 'late pulses are discarded without cycling VM input');
+    await input('pulse');
+    assert.equal(app.nativeCalls.at(-1), 'type', 'the next fresh pulse can use the existing helper');
     app.windowFocus(false);
     await input('arm');
     assert.equal(app.nativeCalls.at(-1), 'stop');

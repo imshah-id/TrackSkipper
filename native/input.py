@@ -18,6 +18,10 @@ class InputInterrupted(ValueError):
     """A changed physical target suspends delivery until the preview requests a new arm."""
 
 
+class InputExpired(ValueError):
+    """A delayed VM request is discarded without restarting the input helper."""
+
+
 class Mac:
     def __init__(self):
         self.cg = C.CDLL('/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices')
@@ -251,8 +255,10 @@ class Guard:
         if not isinstance(command, dict) or set(command) - {'op', 'at', 'kind'}:
             raise ValueError('Invalid native input request.')
         stamp = command.get('at')
-        if type(stamp) not in (int, float) or not math.isfinite(stamp) or not 0 <= time.time() * 1000 - stamp <= 250:
-            raise ValueError('Input heartbeat expired; click the input field to re-arm.')
+        if type(stamp) not in (int, float) or not math.isfinite(stamp):
+            raise ValueError('Invalid input heartbeat.')
+        if not 0 <= time.time() * 1000 - stamp <= 250:
+            raise InputExpired('Input heartbeat expired.')
         if command.get('op') == 'arm' and self.anchor is None:
             if self.backend.busy(): raise InputInterrupted('Release all keys and mouse buttons before arming.')
             self.anchor = self.backend.snapshot()
@@ -262,7 +268,7 @@ class Guard:
         if self.backend.snapshot() != self.anchor or self.backend.busy():
             raise InputInterrupted('Focus, pointer, or physical input changed; return to the replay preview.')
         if not 0 <= time.time() * 1000 - stamp <= 250:
-            raise ValueError('Input heartbeat expired during the native focus check; re-arm VM input.')
+            raise InputExpired('Input heartbeat expired during the native focus check.')
         if time.monotonic() - self.last >= 0.5:
             self.backend.emit(command['kind'], self.anchor[1])
             self.last = time.monotonic()
@@ -278,7 +284,11 @@ def main():
             line = sys.stdin.buffer.readline(1025)
             if not line: return
             if len(line) > 1024: raise ValueError('Oversized input request.')
-            print(json.dumps({'status': guard.handle(json.loads(line))}), flush=True)
+            try:
+                status = guard.handle(json.loads(line))
+            except InputExpired:
+                status = 'armed' if guard.anchor is not None else 'ready'
+            print(json.dumps({'status': status}), flush=True)
     except Exception as error:
         print(json.dumps({'error': str(error)[:512], 'retry': isinstance(error, InputInterrupted)}), flush=True)
         sys.exit(1)

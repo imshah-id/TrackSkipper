@@ -269,7 +269,8 @@
   window.addEventListener('blur', suspendNative);
   window.addEventListener('resize', suspendNative);
   document.addEventListener('visibilitychange', () => { if (document.hidden) suspendNative(); });
-  document.addEventListener('scroll', () => { if (nativeRequested) suspendNative(); }, true);
+  // Playback scrolls the Explorer and tabs itself; only user scroll input suspends delivery.
+  for (const type of ['wheel', 'touchmove']) document.addEventListener(type, suspendNative, { capture: true, passive: true });
   let animation, pointerX = 100, pointerY = 100, phaseKey = '';
   function stopPointer() { if (animation) cancelAnimationFrame(animation); animation = undefined; $('virtual-pointer').classList.remove('clicking'); }
   function pointer() {

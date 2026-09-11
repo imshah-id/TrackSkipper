@@ -28,6 +28,7 @@ test('input transport has no queued events and closes the helper on stop or erro
   });
   const input = exports.createNativeInput('/extension/native/input.py', '/python', status => statuses.push(status));
   input.start();
+  input.start(); assert.equal(calls.length, 1, 'duplicate arm requests do not restart the helper');
   assert.equal(calls[0][2].shell, false);
   input.pulse('click', Date.now()); assert.equal(writes.length, 0, 'startup never queues input');
   child.stdout.emit('data', '{"status":"ready"}\n');
@@ -40,6 +41,18 @@ test('input transport has no queued events and closes the helper on stop or erro
   input.stop(); assert.equal(child.closed, true);
   child.stdout.emit('data', '{"status":"armed"}\n');
   input.pulse('click', Date.now()); assert.equal(writes.length, 2, 'late replies cannot restart input');
+  input.start(); child.stdout.emit('data', '{"status":"ready"}\n');
+  const previousWrites = writes.length, previousCalls = calls.length;
+  input.pulse('type', Date.now() - 1000);
+  assert.equal(writes.length, previousWrites, 'expired input is dropped');
+  assert.equal(child.closed, undefined, 'a delayed VM heartbeat does not terminate the helper');
+  input.pulse('type', Date.now()); child.stdout.emit('data', '{"status":"armed"}\n');
+  input.pulse('type', Date.now() - 1000);
+  assert.equal(writes.length, previousWrites + 1, 'expired armed pulses are also dropped');
+  input.pulse('type', Date.now()); child.stdout.emit('data', '{"status":"armed"}\n');
+  assert.equal(writes.at(-1).op, 'pulse', 'fresh input resumes with the existing guard');
+  assert.equal(calls.length, previousCalls, 'recovery never spawns another helper');
+  input.stop();
   input.start(); child.stdout.emit('data', '{"error":"Pointer changed","retry":true}\n');
   assert.equal(statuses.at(-1), 'Waiting · return to the replay preview');
   assert.equal(child.closed, true);
